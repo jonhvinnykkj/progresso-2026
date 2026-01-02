@@ -4,15 +4,37 @@ Carregamento e processamento de dados
 import pandas as pd
 import streamlit as st
 from datetime import datetime
-from config.settings import DATA_FILES, CACHE_TTL
+from sqlalchemy import create_engine
+from dotenv import load_dotenv
+import os
+
+from config.settings import CACHE_TTL
+
+# Carregar variáveis de ambiente
+load_dotenv()
+
+DATABASE_URL = os.getenv('DATABASE_URL')
+
+
+def get_engine():
+    """Cria engine de conexão com o Neon"""
+    return create_engine(DATABASE_URL)
 
 
 @st.cache_data(ttl=CACHE_TTL)
 def carregar_dados():
-    """Carrega e processa os dados dos arquivos Excel"""
-    df_contas = pd.read_excel(DATA_FILES['contas'])
-    df_adiant = pd.read_excel(DATA_FILES['adiantamentos'])
-    df_baixas = pd.read_excel(DATA_FILES['baixas'])
+    """Carrega e processa os dados do banco Neon PostgreSQL"""
+    engine = get_engine()
+
+    # Carregar dados do banco (colunas em lowercase)
+    df_contas = pd.read_sql("SELECT * FROM contas_pagar", engine)
+    df_adiant = pd.read_sql("SELECT * FROM adiantamentos", engine)
+    df_baixas = pd.read_sql("SELECT * FROM baixas_adiantamentos", engine)
+
+    # Converter nomes de colunas para uppercase (compatibilidade)
+    df_contas.columns = [c.upper() for c in df_contas.columns]
+    df_adiant.columns = [c.upper() for c in df_adiant.columns]
+    df_baixas.columns = [c.upper() for c in df_baixas.columns]
 
     # Converter colunas de data
     for col in ['EMISSAO', 'VENCIMENTO', 'VENCTO_REAL', 'DT_BAIXA']:
