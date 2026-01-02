@@ -7,3 +7,11 @@ font = "sans serif"
 
 [server]
 headless = true
+enableCORS = false
+enableXsrfProtection = false
+
+[client]
+toolbarMode = "minimal"
+
+[ui]
+hideTopBar = false
