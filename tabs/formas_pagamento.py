@@ -1,13 +1,12 @@
 """
-Aba Formas de Pagamento - Análise por modalidade de pagamento
+Aba Formas de Pagamento - Analise por forma de pagamento
 """
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
-import plotly.express as px
 from datetime import datetime
 
-from config.theme import get_cores, get_sequencia_cores
+from config.theme import get_cores
 from components.charts import criar_layout
 from utils.formatters import formatar_moeda, formatar_numero
 
@@ -15,360 +14,389 @@ from utils.formatters import formatar_moeda, formatar_numero
 def render_formas_pagamento(df):
     """Renderiza a aba de Formas de Pagamento"""
     cores = get_cores()
-    seq_cores = get_sequencia_cores()
+    hoje = datetime.now()
 
-    st.markdown("### Formas de Pagamento")
-    st.caption("Análise detalhada por modalidade de pagamento (PIX, TED, Boleto, etc.)")
-
-    # Verificar se as colunas existem
-    if 'FORMA_PAGTO' not in df.columns and 'DESCRICAO_FORMA_PAGAMENTO' not in df.columns:
-        st.warning("Dados de formas de pagamento não disponíveis.")
+    if len(df) == 0:
+        st.warning("Nenhum dado disponivel.")
         return
 
-    # Preparar dados - usar DESCRICAO_FORMA_PAGAMENTO se disponível
-    df_prep = df.copy()
-    if 'DESCRICAO_FORMA_PAGAMENTO' in df_prep.columns:
-        df_prep['FORMA'] = df_prep['DESCRICAO_FORMA_PAGAMENTO'].fillna('Não informado')
-    else:
-        df_prep['FORMA'] = df_prep['FORMA_PAGTO'].fillna('Não informado')
+    # Verificar se coluna existe
+    if 'DESCRICAO_FORMA_PAGAMENTO' not in df.columns:
+        st.warning("Coluna de forma de pagamento nao encontrada.")
+        return
 
-    # Simplificar nomes de formas de pagamento
-    df_prep['FORMA'] = df_prep['FORMA'].apply(_normalizar_forma_pagamento)
+    # Tratar valores vazios/nulos na forma de pagamento - INCLUIR como "Nao Informado"
+    df = df.copy()
+    df['DESCRICAO_FORMA_PAGAMENTO'] = df['DESCRICAO_FORMA_PAGAMENTO'].fillna('').astype(str).str.strip()
+    df.loc[df['DESCRICAO_FORMA_PAGAMENTO'] == '', 'DESCRICAO_FORMA_PAGAMENTO'] = 'Nao Informado'
 
-    # ========== SEÇÃO 1: RESUMO GERAL ==========
-    _render_resumo_formas(df_prep, cores)
+    # Contar registros sem forma original para mostrar cobertura
+    qtd_nao_informado = len(df[df['DESCRICAO_FORMA_PAGAMENTO'] == 'Nao Informado'])
+
+    # ========== RESUMO DE COBERTURA ==========
+    if qtd_nao_informado > 0:
+        total_titulos = len(df)
+        pct_nao_info = qtd_nao_informado / total_titulos * 100
+        qtd_informado = total_titulos - qtd_nao_informado
+
+        st.markdown("##### Cobertura de Dados")
+
+        col1, col2 = st.columns(2)
+
+        col1.metric(
+            "Com Forma Informada",
+            formatar_numero(qtd_informado),
+            f"{100-pct_nao_info:.1f}% dos titulos"
+        )
+
+        col2.metric(
+            "Nao Informado",
+            formatar_numero(qtd_nao_informado),
+            f"{pct_nao_info:.1f}% (incluido na analise)"
+        )
+
+        st.divider()
+
+    # Preparar dados
+    df_pagos = df[df['SALDO'] == 0].copy()
+    df_pendentes = df[df['SALDO'] > 0].copy()
+    df_vencidos = df[df['STATUS'] == 'Vencido'].copy()
+
+    # ========== KPIs ==========
+    total_formas = df['DESCRICAO_FORMA_PAGAMENTO'].nunique()
+    total_valor = df['VALOR_ORIGINAL'].sum()
+    total_pendente = df_pendentes['SALDO'].sum()
+
+    # Forma mais usada
+    forma_mais_usada = df.groupby('DESCRICAO_FORMA_PAGAMENTO')['VALOR_ORIGINAL'].sum().idxmax() if len(df) > 0 else 'N/A'
+    pct_forma_top = (df[df['DESCRICAO_FORMA_PAGAMENTO'] == forma_mais_usada]['VALOR_ORIGINAL'].sum() / total_valor * 100) if total_valor > 0 else 0
+
+    # Pontualidade geral
+    taxa_pontual = 0
+    if len(df_pagos) > 0 and 'DIAS_ATRASO_PGTO' in df_pagos.columns:
+        atraso = df_pagos['DIAS_ATRASO_PGTO'].dropna()
+        if len(atraso) > 0:
+            taxa_pontual = (atraso <= 0).sum() / len(atraso) * 100
+
+    # Prazo medio
+    prazo_medio = 0
+    if len(df_pagos) > 0 and 'DIAS_PARA_PAGAR' in df_pagos.columns:
+        prazo = df_pagos['DIAS_PARA_PAGAR'].dropna()
+        if len(prazo) > 0:
+            prazo_medio = prazo.mean()
+
+    col1, col2, col3, col4, col5 = st.columns(5)
+
+    col1.metric("Formas de Pagto", total_formas)
+    col2.metric("Valor Total", formatar_moeda(total_valor))
+    col3.metric("Pendente", formatar_moeda(total_pendente))
+    col4.metric("Taxa Pontualidade", f"{taxa_pontual:.1f}%")
+    col5.metric("Prazo Medio", f"{prazo_medio:.0f} dias")
 
     st.divider()
 
-    # ========== SEÇÃO 2: ANÁLISES DETALHADAS ==========
-    tab1, tab2, tab3 = st.tabs([
-        "📊 Distribuição",
-        "📈 Evolução Temporal",
-        "📋 Detalhamento"
-    ])
-
-    with tab1:
-        _render_distribuicao(df_prep, cores, seq_cores)
-
-    with tab2:
-        _render_evolucao(df_prep, cores)
-
-    with tab3:
-        _render_detalhes(df_prep, cores)
-
-
-def _normalizar_forma_pagamento(forma):
-    """Normaliza os nomes das formas de pagamento"""
-    if pd.isna(forma) or forma == '' or str(forma).strip() == '':
-        return 'Não Informado'
-
-    forma_upper = str(forma).upper().strip()
-
-    if 'PIX' in forma_upper:
-        if 'QR' in forma_upper:
-            return 'PIX QR Code'
-        return 'PIX Transferência'
-    elif 'TED' in forma_upper:
-        if 'MESMO' in forma_upper:
-            return 'TED Mesmo Titular'
-        elif 'OUTRO' in forma_upper:
-            return 'TED Outro Titular'
-        return 'TED'
-    elif 'BOLETO' in forma_upper or 'TITULO' in forma_upper:
-        return 'Boleto'
-    elif 'COMPENSACAO' in forma_upper or 'COMPENSAÇÃO' in forma_upper:
-        return 'Compensação'
-    elif 'CHEQUE' in forma_upper:
-        return 'Cheque'
-    elif 'DINHEIRO' in forma_upper:
-        return 'Dinheiro'
-    elif 'SEM PAGAMENTO' in forma_upper:
-        return 'Sem Pagamento Financeiro'
-    elif 'LIQUIDACAO' in forma_upper or 'LIQUIDAÇÃO' in forma_upper:
-        return 'Liquidação Bancária'
-
-    return forma[:30] if len(forma) > 30 else forma
-
-
-def _render_resumo_formas(df, cores):
-    """Resumo geral das formas de pagamento"""
-
-    # Calcular totais por forma
-    df_formas = df.groupby('FORMA').agg({
-        'VALOR_ORIGINAL': 'sum',
-        'SALDO': 'sum',
-        'FORNECEDOR': 'count'
-    }).reset_index()
-    df_formas.columns = ['Forma', 'Valor_Total', 'Saldo', 'Qtd_Títulos']
-    df_formas = df_formas.sort_values('Valor_Total', ascending=False)
-
-    # Top 3 formas
-    top3 = df_formas.head(3)
-
-    st.markdown("#### Resumo Geral")
-
-    # KPIs das top 3 formas
-    cols = st.columns(len(top3) + 2)
-
-    for i, (_, row) in enumerate(top3.iterrows()):
-        with cols[i]:
-            pct = row['Valor_Total'] / df['VALOR_ORIGINAL'].sum() * 100
-            st.metric(
-                row['Forma'][:20],
-                formatar_moeda(row['Valor_Total']),
-                delta=f"{row['Qtd_Títulos']} títulos ({pct:.1f}%)",
-                delta_color="off"
-            )
-
-    # Total de formas e concentração
-    with cols[-2]:
-        total_formas = len(df_formas)
-        st.metric(
-            "Formas Utilizadas",
-            f"{total_formas}",
-            delta="modalidades diferentes",
-            delta_color="off"
-        )
-
-    # Concentração
-    with cols[-1]:
-        top3_pct = top3['Valor_Total'].sum() / df['VALOR_ORIGINAL'].sum() * 100
-        st.metric(
-            "Concentração Top 3",
-            f"{top3_pct:.1f}%",
-            delta="do valor total",
-            delta_color="off"
-        )
-
-
-def _render_distribuicao(df, cores, seq_cores):
-    """Distribuição por forma de pagamento"""
-
+    # ========== GRAFICOS LINHA 1 ==========
     col1, col2 = st.columns(2)
 
-    # Agrupar por forma
-    df_formas = df.groupby('FORMA').agg({
-        'VALOR_ORIGINAL': 'sum',
-        'FORNECEDOR': 'count'
-    }).reset_index()
-    df_formas.columns = ['Forma', 'Valor', 'Qtd']
-    df_formas = df_formas.sort_values('Valor', ascending=False)
-    total = df_formas['Valor'].sum()
-    df_formas['Pct'] = (df_formas['Valor'] / total * 100).round(1)
-
     with col1:
-        st.markdown("##### Distribuição por Valor")
-
-        fig = go.Figure(go.Pie(
-            labels=df_formas['Forma'],
-            values=df_formas['Valor'],
-            hole=0.5,
-            marker=dict(colors=seq_cores),
-            textinfo='percent+label',
-            textposition='outside',
-            textfont=dict(size=10),
-            hovertemplate='<b>%{label}</b><br>Valor: R$ %{value:,.2f}<br>%{percent}<extra></extra>'
-        ))
-
-        # Texto central
-        fig.add_annotation(
-            text=f"<b>{formatar_moeda(total)}</b><br>Total",
-            x=0.5, y=0.5,
-            font=dict(size=14, color=cores['texto']),
-            showarrow=False
-        )
-
-        fig.update_layout(
-            criar_layout(400),
-            showlegend=False,
-            margin=dict(l=20, r=20, t=20, b=20)
-        )
-
-        st.plotly_chart(fig, use_container_width=True)
+        _render_distribuicao_valor(df, cores)
 
     with col2:
-        st.markdown("##### Distribuição por Quantidade")
+        _render_distribuicao_quantidade(df, cores)
 
-        fig2 = go.Figure()
+    # ========== GRAFICOS LINHA 2 ==========
+    col1, col2 = st.columns(2)
 
-        fig2.add_trace(go.Bar(
-            y=df_formas['Forma'],
-            x=df_formas['Qtd'],
-            orientation='h',
-            marker_color=cores['primaria'],
-            text=[f"{q:,}" for q in df_formas['Qtd']],
-            textposition='outside',
-            textfont=dict(size=10)
-        ))
+    with col1:
+        _render_prazo_por_forma(df_pagos, cores)
 
-        fig2.update_layout(
-            criar_layout(400),
-            yaxis={'autorange': 'reversed'},
-            xaxis_title='Quantidade de Títulos',
-            margin=dict(l=10, r=10, t=20, b=30)
-        )
+    with col2:
+        _render_pontualidade_por_forma(df_pagos, cores)
 
-        st.plotly_chart(fig2, use_container_width=True)
+    # ========== GRAFICOS LINHA 3 ==========
+    col1, col2 = st.columns(2)
 
-    # Tabela resumo
-    st.markdown("##### Resumo por Forma de Pagamento")
+    with col1:
+        _render_pendente_por_forma(df_pendentes, cores)
 
-    df_exibir = df_formas.copy()
-    df_exibir['Ticket_Médio'] = df_exibir['Valor'] / df_exibir['Qtd']
-    df_exibir['Valor'] = df_exibir['Valor'].apply(lambda x: formatar_moeda(x, completo=True))
-    df_exibir['Ticket_Médio'] = df_exibir['Ticket_Médio'].apply(lambda x: formatar_moeda(x, completo=True))
-    df_exibir = df_exibir.rename(columns={
-        'Forma': 'Forma de Pagamento',
-        'Valor': 'Valor Total',
-        'Qtd': 'Qtd Títulos',
-        'Pct': '% do Total',
-        'Ticket_Médio': 'Ticket Médio'
-    })
+    with col2:
+        _render_vencido_por_forma(df_vencidos, cores)
 
-    st.dataframe(
-        df_exibir,
-        use_container_width=True,
-        hide_index=True,
-        column_config={
-            '% do Total': st.column_config.ProgressColumn(
-                '% do Total',
-                format='%.1f%%',
-                min_value=0,
-                max_value=100
-            )
-        }
-    )
+    st.divider()
+
+    # ========== TABELA RANKING ==========
+    _render_ranking_formas(df, df_pagos, df_pendentes, df_vencidos, cores)
 
 
-def _render_evolucao(df, cores):
-    """Evolução temporal por forma de pagamento"""
+def _render_distribuicao_valor(df, cores):
+    """Distribuicao por valor"""
 
-    st.markdown("##### Evolução Mensal por Forma de Pagamento")
+    st.markdown("##### Distribuicao por Valor")
 
-    df_temp = df.copy()
-    df_temp['MES_ANO'] = df_temp['EMISSAO'].dt.to_period('M')
+    df_grp = df.groupby('DESCRICAO_FORMA_PAGAMENTO')['VALOR_ORIGINAL'].sum().sort_values(ascending=False).head(10).reset_index()
+    df_grp.columns = ['Forma', 'Valor']
 
-    # Pegar top 5 formas
-    top_formas = df.groupby('FORMA')['VALOR_ORIGINAL'].sum().nlargest(5).index.tolist()
-
-    df_mensal = df_temp[df_temp['FORMA'].isin(top_formas)].groupby(['MES_ANO', 'FORMA']).agg({
-        'VALOR_ORIGINAL': 'sum'
-    }).reset_index()
-    df_mensal.columns = ['Período', 'Forma', 'Valor']
-    df_mensal['Período'] = df_mensal['Período'].astype(str)
-
-    # Últimos 12 meses
-    ultimos_periodos = df_mensal['Período'].unique()[-12:]
-    df_mensal = df_mensal[df_mensal['Período'].isin(ultimos_periodos)]
-
-    fig = go.Figure()
-
-    cores_formas = {
-        'PIX Transferência': cores['primaria'],
-        'Boleto': cores['info'],
-        'TED Outro Titular': cores['alerta'],
-        'TED Mesmo Titular': '#8b5cf6',
-        'Compensação': '#ec4899'
-    }
-
-    for forma in top_formas:
-        df_forma = df_mensal[df_mensal['Forma'] == forma]
-        fig.add_trace(go.Scatter(
-            x=df_forma['Período'],
-            y=df_forma['Valor'],
-            mode='lines+markers',
-            name=forma[:20],
-            line=dict(width=2, color=cores_formas.get(forma, cores['texto_secundario'])),
-            marker=dict(size=6)
-        ))
+    fig = go.Figure(go.Pie(
+        labels=df_grp['Forma'],
+        values=df_grp['Valor'],
+        hole=0.5,
+        marker=dict(colors=[cores['primaria'], cores['info'], cores['sucesso'], cores['alerta'], '#8b5cf6', '#ec4899', '#06b6d4', '#84cc16', '#f97316', '#6366f1']),
+        textinfo='percent',
+        textfont=dict(size=10),
+        hovertemplate='<b>%{label}</b><br>%{value:,.2f}<br>%{percent}<extra></extra>'
+    ))
 
     fig.update_layout(
-        criar_layout(400),
-        xaxis_tickangle=-45,
-        legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='center', x=0.5),
-        margin=dict(l=10, r=10, t=50, b=60)
+        criar_layout(280),
+        showlegend=True,
+        legend=dict(orientation="v", yanchor="middle", y=0.5, xanchor="left", x=1.02, font=dict(size=9)),
+        margin=dict(l=10, r=120, t=10, b=10)
     )
 
     st.plotly_chart(fig, use_container_width=True)
 
-    # Comparativo mensal em barras empilhadas
-    st.markdown("##### Composição Mensal")
 
-    df_pivot = df_mensal.pivot(index='Período', columns='Forma', values='Valor').fillna(0)
+def _render_distribuicao_quantidade(df, cores):
+    """Distribuicao por quantidade"""
 
-    fig2 = go.Figure()
+    st.markdown("##### Distribuicao por Quantidade")
 
-    for forma in df_pivot.columns:
-        fig2.add_trace(go.Bar(
-            x=df_pivot.index,
-            y=df_pivot[forma],
-            name=forma[:15],
-            marker_color=cores_formas.get(forma, cores['texto_secundario'])
-        ))
+    df_grp = df.groupby('DESCRICAO_FORMA_PAGAMENTO').size().sort_values(ascending=False).head(10).reset_index()
+    df_grp.columns = ['Forma', 'Qtd']
 
-    fig2.update_layout(
-        criar_layout(350, barmode='stack'),
-        xaxis_tickangle=-45,
-        legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='center', x=0.5),
-        margin=dict(l=10, r=10, t=50, b=60)
-    )
-
-    st.plotly_chart(fig2, use_container_width=True)
-
-
-def _render_detalhes(df, cores):
-    """Detalhamento por forma de pagamento"""
-
-    st.markdown("##### Análise por Forma de Pagamento")
-
-    # Seletor de forma
-    formas_disponiveis = ['Todas'] + sorted(df['FORMA'].unique().tolist())
-    forma_selecionada = st.selectbox("Selecione a forma de pagamento:", formas_disponiveis)
-
-    if forma_selecionada != 'Todas':
-        df_filtrado = df[df['FORMA'] == forma_selecionada]
-    else:
-        df_filtrado = df
-
-    # Métricas
-    col1, col2, col3, col4 = st.columns(4)
-
-    total_valor = df_filtrado['VALOR_ORIGINAL'].sum()
-    total_titulos = len(df_filtrado)
-    ticket_medio = total_valor / total_titulos if total_titulos > 0 else 0
-    fornecedores = df_filtrado['NOME_FORNECEDOR'].nunique()
-
-    col1.metric("Valor Total", formatar_moeda(total_valor))
-    col2.metric("Qtd Títulos", formatar_numero(total_titulos))
-    col3.metric("Ticket Médio", formatar_moeda(ticket_medio))
-    col4.metric("Fornecedores", formatar_numero(fornecedores))
-
-    # Top fornecedores para a forma selecionada
-    st.markdown("##### Top 10 Fornecedores")
-
-    df_forn = df_filtrado.groupby('NOME_FORNECEDOR').agg({
-        'VALOR_ORIGINAL': 'sum',
-        'FORNECEDOR': 'count'
-    }).reset_index()
-    df_forn.columns = ['Fornecedor', 'Valor', 'Qtd']
-    df_forn = df_forn.sort_values('Valor', ascending=False).head(10)
-
-    fig = go.Figure()
-
-    fig.add_trace(go.Bar(
-        y=df_forn['Fornecedor'].str[:30],
-        x=df_forn['Valor'],
-        orientation='h',
-        marker_color=cores['primaria'],
-        text=[formatar_moeda(v) for v in df_forn['Valor']],
+    fig = go.Figure(go.Bar(
+        x=df_grp['Forma'].str[:15],
+        y=df_grp['Qtd'],
+        marker_color=cores['info'],
+        text=df_grp['Qtd'],
         textposition='outside',
         textfont=dict(size=9)
     ))
 
     fig.update_layout(
-        criar_layout(350),
-        yaxis={'autorange': 'reversed'},
-        margin=dict(l=10, r=10, t=10, b=10)
+        criar_layout(280),
+        xaxis_tickangle=-45,
+        margin=dict(l=10, r=10, t=10, b=80)
     )
 
     st.plotly_chart(fig, use_container_width=True)
+
+
+def _render_prazo_por_forma(df_pagos, cores):
+    """Prazo medio de pagamento por forma"""
+
+    st.markdown("##### Prazo Medio por Forma")
+
+    if len(df_pagos) == 0 or 'DIAS_PARA_PAGAR' not in df_pagos.columns:
+        st.info("Sem dados de pagamento")
+        return
+
+    df_grp = df_pagos.groupby('DESCRICAO_FORMA_PAGAMENTO').agg({
+        'DIAS_PARA_PAGAR': 'mean',
+        'VALOR_ORIGINAL': 'count'
+    }).reset_index()
+    df_grp.columns = ['Forma', 'Prazo', 'Qtd']
+
+    # Filtrar formas com pelo menos 5 pagamentos
+    df_grp = df_grp[df_grp['Qtd'] >= 5].sort_values('Prazo', ascending=True).head(10)
+
+    if len(df_grp) == 0:
+        st.info("Sem dados suficientes (min. 5 pagamentos)")
+        return
+
+    fig = go.Figure(go.Bar(
+        y=df_grp['Forma'].str[:20],
+        x=df_grp['Prazo'],
+        orientation='h',
+        marker_color=cores['primaria'],
+        text=[f"{p:.0f}d" for p in df_grp['Prazo']],
+        textposition='outside',
+        textfont=dict(size=9)
+    ))
+
+    fig.update_layout(
+        criar_layout(280),
+        yaxis={'autorange': 'reversed'},
+        margin=dict(l=10, r=50, t=10, b=10)
+    )
+
+    st.plotly_chart(fig, use_container_width=True)
+
+
+def _render_pontualidade_por_forma(df_pagos, cores):
+    """Pontualidade por forma de pagamento"""
+
+    st.markdown("##### Pontualidade por Forma")
+
+    if len(df_pagos) == 0 or 'DIAS_ATRASO_PGTO' not in df_pagos.columns:
+        st.info("Sem dados de pagamento")
+        return
+
+    # Calcular pontualidade por forma
+    def calc_pontualidade(group):
+        atraso = group['DIAS_ATRASO_PGTO'].dropna()
+        if len(atraso) < 5:
+            return None
+        return (atraso <= 0).sum() / len(atraso) * 100
+
+    df_pont = df_pagos.groupby('DESCRICAO_FORMA_PAGAMENTO').apply(calc_pontualidade).dropna().sort_values(ascending=False).head(10).reset_index()
+    df_pont.columns = ['Forma', 'Pontualidade']
+
+    if len(df_pont) == 0:
+        st.info("Sem dados suficientes (min. 5 pagamentos)")
+        return
+
+    # Cores baseadas na pontualidade
+    def cor_pont(p):
+        if p >= 70:
+            return cores['sucesso']
+        elif p >= 50:
+            return cores['alerta']
+        return cores['perigo']
+
+    fig = go.Figure(go.Bar(
+        y=df_pont['Forma'].str[:20],
+        x=df_pont['Pontualidade'],
+        orientation='h',
+        marker_color=[cor_pont(p) for p in df_pont['Pontualidade']],
+        text=[f"{p:.0f}%" for p in df_pont['Pontualidade']],
+        textposition='outside',
+        textfont=dict(size=9)
+    ))
+
+    fig.update_layout(
+        criar_layout(280),
+        yaxis={'autorange': 'reversed'},
+        xaxis=dict(range=[0, 105]),
+        margin=dict(l=10, r=40, t=10, b=10)
+    )
+
+    st.plotly_chart(fig, use_container_width=True)
+
+
+def _render_pendente_por_forma(df_pendentes, cores):
+    """Valor pendente por forma"""
+
+    st.markdown("##### Valor Pendente por Forma")
+
+    if len(df_pendentes) == 0:
+        st.success("Sem pendencias!")
+        return
+
+    df_grp = df_pendentes.groupby('DESCRICAO_FORMA_PAGAMENTO')['SALDO'].sum().sort_values(ascending=False).head(8).reset_index()
+    df_grp.columns = ['Forma', 'Valor']
+
+    fig = go.Figure(go.Bar(
+        y=df_grp['Forma'].str[:20],
+        x=df_grp['Valor'],
+        orientation='h',
+        marker_color=cores['alerta'],
+        text=[formatar_moeda(v) for v in df_grp['Valor']],
+        textposition='outside',
+        textfont=dict(size=9)
+    ))
+
+    fig.update_layout(
+        criar_layout(250),
+        yaxis={'autorange': 'reversed'},
+        margin=dict(l=10, r=80, t=10, b=10)
+    )
+
+    st.plotly_chart(fig, use_container_width=True)
+
+
+def _render_vencido_por_forma(df_vencidos, cores):
+    """Valor vencido por forma"""
+
+    st.markdown("##### Valor Vencido por Forma")
+
+    if len(df_vencidos) == 0:
+        st.success("Sem vencidos!")
+        return
+
+    df_grp = df_vencidos.groupby('DESCRICAO_FORMA_PAGAMENTO')['SALDO'].sum().sort_values(ascending=False).head(8).reset_index()
+    df_grp.columns = ['Forma', 'Valor']
+
+    fig = go.Figure(go.Bar(
+        y=df_grp['Forma'].str[:20],
+        x=df_grp['Valor'],
+        orientation='h',
+        marker_color=cores['perigo'],
+        text=[formatar_moeda(v) for v in df_grp['Valor']],
+        textposition='outside',
+        textfont=dict(size=9)
+    ))
+
+    fig.update_layout(
+        criar_layout(250),
+        yaxis={'autorange': 'reversed'},
+        margin=dict(l=10, r=80, t=10, b=10)
+    )
+
+    st.plotly_chart(fig, use_container_width=True)
+
+
+def _render_ranking_formas(df, df_pagos, df_pendentes, df_vencidos, cores):
+    """Tabela ranking de formas de pagamento"""
+
+    st.markdown("##### Ranking - Formas de Pagamento")
+
+    # Agrupar dados
+    df_grp = df.groupby('DESCRICAO_FORMA_PAGAMENTO').agg({
+        'VALOR_ORIGINAL': ['count', 'sum'],
+        'SALDO': 'sum'
+    }).reset_index()
+    df_grp.columns = ['Forma', 'Qtd', 'Total', 'Saldo']
+
+    # Calcular pontualidade
+    if len(df_pagos) > 0 and 'DIAS_ATRASO_PGTO' in df_pagos.columns:
+        def calc_pont(forma):
+            subset = df_pagos[df_pagos['DESCRICAO_FORMA_PAGAMENTO'] == forma]['DIAS_ATRASO_PGTO'].dropna()
+            if len(subset) < 5:
+                return None
+            return (subset <= 0).sum() / len(subset) * 100
+
+        df_grp['Pontualidade'] = df_grp['Forma'].apply(calc_pont)
+    else:
+        df_grp['Pontualidade'] = None
+
+    # Calcular prazo medio
+    if len(df_pagos) > 0 and 'DIAS_PARA_PAGAR' in df_pagos.columns:
+        def calc_prazo(forma):
+            subset = df_pagos[df_pagos['DESCRICAO_FORMA_PAGAMENTO'] == forma]['DIAS_PARA_PAGAR'].dropna()
+            if len(subset) < 5:
+                return None
+            return subset.mean()
+
+        df_grp['Prazo'] = df_grp['Forma'].apply(calc_prazo)
+    else:
+        df_grp['Prazo'] = None
+
+    # Calcular vencido
+    df_venc_grp = df_vencidos.groupby('DESCRICAO_FORMA_PAGAMENTO')['SALDO'].sum().reset_index()
+    df_venc_grp.columns = ['Forma', 'Vencido']
+    df_grp = df_grp.merge(df_venc_grp, on='Forma', how='left')
+    df_grp['Vencido'] = df_grp['Vencido'].fillna(0)
+
+    # Ordenar
+    df_grp = df_grp.sort_values('Total', ascending=False)
+
+    # Formatar
+    df_show = df_grp.copy()
+    df_show['Total'] = df_show['Total'].apply(lambda x: formatar_moeda(x, completo=True))
+    df_show['Saldo'] = df_show['Saldo'].apply(lambda x: formatar_moeda(x, completo=True))
+    df_show['Vencido'] = df_show['Vencido'].apply(lambda x: formatar_moeda(x, completo=True))
+    df_show['Pontualidade'] = df_show['Pontualidade'].apply(lambda x: f"{x:.0f}%" if pd.notna(x) else '-')
+    df_show['Prazo'] = df_show['Prazo'].apply(lambda x: f"{x:.0f}d" if pd.notna(x) else '-')
+
+    # Renomear
+    df_show.columns = ['Forma de Pagamento', 'Qtd Titulos', 'Valor Total', 'Saldo Pendente', 'Pontualidade', 'Prazo Medio', 'Valor Vencido']
+
+    st.dataframe(
+        df_show,
+        use_container_width=True,
+        hide_index=True,
+        height=400
+    )
+
+    st.caption(f"Total: {len(df_show)} formas de pagamento")

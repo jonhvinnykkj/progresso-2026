@@ -9,6 +9,7 @@ def get_cores():
     return {
         'primaria': '#00873D',
         'primaria_escura': '#005A28',
+        'secundaria': '#3b82f6',
         'sucesso': '#22c55e',
         'alerta': '#f59e0b',
         'perigo': '#ef4444',
@@ -57,8 +58,75 @@ def get_css():
             color: {cores['texto']} !important;
         }}
 
-        /* Esconder menu */
+        /* Esconder menu e navegacao nativa do multi-page */
         #MainMenu, footer {{ visibility: hidden; }}
+
+        /* ============================================== */
+        /* ESCONDER COMPLETAMENTE NAVEGACAO NATIVA       */
+        /* Streamlit Multi-page Navigation - ALL VERSIONS */
+        /* ============================================== */
+
+        /* Esconder por data-testid */
+        [data-testid="stSidebarNav"],
+        [data-testid="stSidebarNavItems"],
+        [data-testid="stSidebarNavLink"],
+        [data-testid="stSidebarNavSeparator"],
+        [data-testid="stSidebarUserContent"] > div:first-child,
+        nav[data-testid="stSidebarNav"],
+        div[data-testid="stSidebarNav"] {{
+            display: none !important;
+            visibility: hidden !important;
+            height: 0 !important;
+            width: 0 !important;
+            max-height: 0 !important;
+            overflow: hidden !important;
+            position: absolute !important;
+            left: -9999px !important;
+            pointer-events: none !important;
+        }}
+
+        /* Esconder pela estrutura do DOM - Streamlit 1.31+ */
+        section[data-testid="stSidebar"] > div:first-child > div:first-child > div:first-child {{
+            display: none !important;
+        }}
+
+        /* Esconder lista de paginas - varios seletores */
+        section[data-testid="stSidebar"] > div > div > div > div > ul,
+        section[data-testid="stSidebar"] > div > div > ul,
+        section[data-testid="stSidebar"] ul:first-of-type,
+        section[data-testid="stSidebar"] nav,
+        section[data-testid="stSidebar"] [data-testid="stSidebarNavItems"],
+        [data-testid="stSidebarContent"] > div:first-child > ul,
+        [data-testid="stSidebarContent"] > ul,
+        [data-testid="stSidebarContent"] > div:first-child {{
+            display: none !important;
+            visibility: hidden !important;
+            height: 0 !important;
+            max-height: 0 !important;
+            overflow: hidden !important;
+        }}
+
+        /* Esconder links de navegacao - todos os padroes */
+        section[data-testid="stSidebar"] a[href*="app"],
+        section[data-testid="stSidebar"] a[href*="Intercompany"],
+        section[data-testid="stSidebar"] a[href*="Contas"],
+        section[data-testid="stSidebar"] a[href*="Receber"],
+        section[data-testid="stSidebar"] a[href*="pages"],
+        section[data-testid="stSidebar"] a[data-testid="stSidebarNavLink"],
+        section[data-testid="stSidebar"] li {{
+            display: none !important;
+        }}
+
+        /* Esconder separadores de navegacao */
+        [data-testid="stSidebarNavSeparator"],
+        section[data-testid="stSidebar"] hr:first-of-type {{
+            display: none !important;
+        }}
+
+        /* Esconder icones de navegacao */
+        section[data-testid="stSidebar"] svg[data-testid] {{
+            display: none !important;
+        }}
 
         /* Manter header visível para o botão da sidebar */
         header[data-testid="stHeader"] {{

@@ -10,7 +10,7 @@ from utils.formatters import to_excel, to_csv, formatar_moeda, formatar_numero
 
 
 def render_sidebar(df_contas, filiais_opcoes, categorias_opcoes):
-    """Renderiza a sidebar"""
+    """Renderiza a sidebar (sem periodo - agora na navbar)"""
     cores = get_cores()
     hoje = datetime.now()
 
@@ -27,24 +27,6 @@ def render_sidebar(df_contas, filiais_opcoes, categorias_opcoes):
             </div>
         </div>
         """, unsafe_allow_html=True)
-
-        st.divider()
-
-        # Período
-        st.markdown(f"<p style='color: {cores['texto']}; font-size: 0.8rem; font-weight: 600; margin-bottom: 0.5rem;'>Período</p>", unsafe_allow_html=True)
-
-        data_min = df_contas['EMISSAO'].min().date()
-        data_max = df_contas['EMISSAO'].max().date()
-        anos = list(range(data_min.year, data_max.year + 1))
-
-        tipo = st.selectbox("Tipo", ['Rápido', 'Por Ano', 'Por Mês', 'Intervalo'], label_visibility="collapsed")
-
-        data_inicio, data_fim = _processar_periodo(tipo, data_min, data_max, anos, hoje)
-
-        data_inicio = max(data_inicio, data_min)
-        data_fim = min(data_fim, data_max)
-
-        st.caption(f"📅 {data_inicio.strftime('%d/%m/%Y')} a {data_fim.strftime('%d/%m/%Y')}")
 
         st.divider()
 
@@ -113,6 +95,8 @@ def render_sidebar(df_contas, filiais_opcoes, categorias_opcoes):
         </div>
         """, unsafe_allow_html=True)
 
+        st.divider()
+
         # Footer
         st.markdown(f"""
         <div style="text-align: center; margin-top: 1.5rem; padding-top: 1rem;
@@ -122,59 +106,4 @@ def render_sidebar(df_contas, filiais_opcoes, categorias_opcoes):
         </div>
         """, unsafe_allow_html=True)
 
-    return data_inicio, data_fim, filtro_filial, filtro_status, filtro_categoria, busca_fornecedor, filtro_tipo_doc, filtro_forma_pagto
-
-
-def _processar_periodo(tipo, data_min, data_max, anos, hoje):
-    """Processa seleção de período"""
-
-    if tipo == 'Rápido':
-        opcao = st.selectbox("Período", OPCOES_PERIODO_RAPIDO, label_visibility="collapsed")
-
-        if opcao == 'Todos os dados':
-            return data_min, data_max
-        elif opcao == 'Hoje':
-            return hoje.date(), hoje.date()
-        elif opcao == 'Últimos 7 dias':
-            return hoje.date() - timedelta(days=7), hoje.date()
-        elif opcao == 'Últimos 30 dias':
-            return hoje.date() - timedelta(days=30), hoje.date()
-        elif opcao == 'Últimos 90 dias':
-            return hoje.date() - timedelta(days=90), hoje.date()
-        elif opcao == 'Este mês':
-            return hoje.date().replace(day=1), hoje.date()
-        elif opcao == 'Mês passado':
-            primeiro = hoje.date().replace(day=1)
-            fim = primeiro - timedelta(days=1)
-            return fim.replace(day=1), fim
-        elif opcao == 'Este ano':
-            return hoje.date().replace(month=1, day=1), hoje.date()
-
-    elif tipo == 'Por Ano':
-        col1, col2 = st.columns(2)
-        with col1:
-            ano_ini = st.selectbox("De", anos, index=0, key="ano_ini")
-        with col2:
-            ano_fim = st.selectbox("Até", anos, index=len(anos)-1, key="ano_fim")
-        return date(ano_ini, 1, 1), date(ano_fim, 12, 31)
-
-    elif tipo == 'Por Mês':
-        col1, col2 = st.columns(2)
-        with col1:
-            ano = st.selectbox("Ano", anos, index=len(anos)-1, key="ano_mes")
-        with col2:
-            meses = list(MESES_NOMES.values())
-            mes_sel = st.selectbox("Mês", meses, index=hoje.month-1, key="mes_sel")
-            mes_num = [k for k, v in MESES_NOMES.items() if v == mes_sel][0]
-        ultimo = calendar.monthrange(ano, mes_num)[1]
-        return date(ano, mes_num, 1), date(ano, mes_num, ultimo)
-
-    elif tipo == 'Intervalo':
-        col1, col2 = st.columns(2)
-        with col1:
-            d_ini = st.date_input("De", value=data_min, min_value=data_min, max_value=data_max, key="d_ini")
-        with col2:
-            d_fim = st.date_input("Até", value=data_max, min_value=data_min, max_value=data_max, key="d_fim")
-        return d_ini, d_fim
-
-    return data_min, data_max
+    return filtro_filial, filtro_status, filtro_categoria, busca_fornecedor, filtro_tipo_doc, filtro_forma_pagto

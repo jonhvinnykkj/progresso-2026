@@ -12,6 +12,7 @@ enableXsrfProtection = false
 
 [client]
 toolbarMode = "minimal"
+showSidebarNavigation = false
 
 [ui]
 hideTopBar = false

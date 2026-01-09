@@ -12,6 +12,8 @@ def formatar_moeda(valor, completo=False):
         return "R$ 0"
     if completo:
         return f"R$ {valor:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+    if abs(valor) >= 1_000_000_000:
+        return f"R$ {valor/1_000_000_000:.2f}Bi"
     if abs(valor) >= 1_000_000:
         return f"R$ {valor/1_000_000:.1f}M"
     if abs(valor) >= 1_000:

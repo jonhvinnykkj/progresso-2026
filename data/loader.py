@@ -21,6 +21,117 @@ def get_engine():
     return create_engine(DATABASE_URL)
 
 
+def padronizar_forma_pagamento(serie):
+    """Padroniza as formas de pagamento para evitar duplicatas"""
+    # Mapeamento de variações para forma padronizada
+    mapeamento = {
+        # Boleto
+        'BOLETO': 'Boleto',
+        'BOLETO BANCARIO': 'Boleto',
+        'BOLETO BANCÁRIO': 'Boleto',
+        'BOL': 'Boleto',
+        'BOLETOS': 'Boleto',
+
+        # PIX
+        'PIX': 'PIX',
+        'TRANSFERENCIA PIX': 'PIX',
+        'TRANSFERÊNCIA PIX': 'PIX',
+        'TED/PIX': 'PIX',
+
+        # Transferência/TED/DOC
+        'TRANSFERENCIA': 'Transferencia',
+        'TRANSFERÊNCIA': 'Transferencia',
+        'TRANSFERENCIA BANCARIA': 'Transferencia',
+        'TRANSFERÊNCIA BANCÁRIA': 'Transferencia',
+        'TED': 'Transferencia',
+        'DOC': 'Transferencia',
+        'TED/DOC': 'Transferencia',
+
+        # Débito em Conta
+        'DEBITO EM CONTA': 'Debito em Conta',
+        'DÉBITO EM CONTA': 'Debito em Conta',
+        'DEBITO CONTA': 'Debito em Conta',
+        'DÉBITO CONTA': 'Debito em Conta',
+        'DEB. CONTA': 'Debito em Conta',
+        'DEBITO AUTOMATICO': 'Debito em Conta',
+        'DÉBITO AUTOMÁTICO': 'Debito em Conta',
+        'DEB. AUTOMATICO': 'Debito em Conta',
+
+        # Cartão de Crédito
+        'CARTAO DE CREDITO': 'Cartao Credito',
+        'CARTÃO DE CRÉDITO': 'Cartao Credito',
+        'CARTAO CREDITO': 'Cartao Credito',
+        'CARTÃO CRÉDITO': 'Cartao Credito',
+        'CART. CREDITO': 'Cartao Credito',
+        'CARTAO': 'Cartao Credito',
+        'CARTÃO': 'Cartao Credito',
+        'C. CREDITO': 'Cartao Credito',
+
+        # Cartão de Débito
+        'CARTAO DE DEBITO': 'Cartao Debito',
+        'CARTÃO DE DÉBITO': 'Cartao Debito',
+        'CARTAO DEBITO': 'Cartao Debito',
+        'CARTÃO DÉBITO': 'Cartao Debito',
+
+        # Dinheiro/Espécie
+        'DINHEIRO': 'Dinheiro',
+        'ESPECIE': 'Dinheiro',
+        'ESPÉCIE': 'Dinheiro',
+        'EM ESPECIE': 'Dinheiro',
+        'EM ESPÉCIE': 'Dinheiro',
+
+        # Cheque
+        'CHEQUE': 'Cheque',
+        'CHQ': 'Cheque',
+        'CHEQUES': 'Cheque',
+        'CHEQUE A VISTA': 'Cheque',
+        'CHEQUE À VISTA': 'Cheque',
+        'CHEQUE PRE': 'Cheque Pre-datado',
+        'CHEQUE PRÉ': 'Cheque Pre-datado',
+        'CHEQUE PRE-DATADO': 'Cheque Pre-datado',
+        'CHEQUE PRÉ-DATADO': 'Cheque Pre-datado',
+
+        # Compensação/Encontro de Contas
+        'COMPENSACAO': 'Compensacao',
+        'COMPENSAÇÃO': 'Compensacao',
+        'ENCONTRO DE CONTAS': 'Compensacao',
+        'ACERTO': 'Compensacao',
+
+        # Depósito
+        'DEPOSITO': 'Deposito',
+        'DEPÓSITO': 'Deposito',
+        'DEPOSITO BANCARIO': 'Deposito',
+        'DEPÓSITO BANCÁRIO': 'Deposito',
+        'DEP. BANCARIO': 'Deposito',
+
+        # Duplicata/Cobrança
+        'DUPLICATA': 'Duplicata',
+        'COBRANCA': 'Cobranca',
+        'COBRANÇA': 'Cobranca',
+        'COBRANCA BANCARIA': 'Cobranca',
+        'COBRANÇA BANCÁRIA': 'Cobranca',
+
+        # Outros
+        'A DEFINIR': 'A Definir',
+        'NAO INFORMADO': 'Nao Informado',
+        'NÃO INFORMADO': 'Nao Informado',
+        'OUTROS': 'Outros',
+        'OUTRO': 'Outros',
+    }
+
+    def mapear(valor):
+        if pd.isna(valor) or str(valor).strip() == '':
+            return ''
+        valor_upper = str(valor).upper().strip()
+        # Tenta encontrar no mapeamento
+        if valor_upper in mapeamento:
+            return mapeamento[valor_upper]
+        # Se não encontrar, retorna o valor original com primeira letra maiúscula
+        return str(valor).strip().title()
+
+    return serie.apply(mapear)
+
+
 @st.cache_data(ttl=CACHE_TTL)
 def carregar_dados():
     """Carrega e processa os dados do banco Neon PostgreSQL"""
@@ -67,10 +178,23 @@ def carregar_dados():
     mask_vencido = (df_contas['STATUS'] == 'Vencido') & df_contas['DIAS_VENC'].notna()
     df_contas.loc[mask_vencido, 'DIAS_ATRASO'] = df_contas.loc[mask_vencido, 'DIAS_VENC'].abs()
 
+    # Calcular dias para pagar (da emissao ate o pagamento)
+    if 'DT_BAIXA' in df_contas.columns:
+        df_contas['DIAS_PARA_PAGAR'] = (df_contas['DT_BAIXA'] - df_contas['EMISSAO']).dt.days
+        # Se pagou antes do vencimento = negativo (antecipado), se pagou depois = positivo (atrasado)
+        df_contas['DIAS_ATRASO_PGTO'] = (df_contas['DT_BAIXA'] - df_contas['VENCIMENTO']).dt.days
+    else:
+        df_contas['DIAS_PARA_PAGAR'] = None
+        df_contas['DIAS_ATRASO_PGTO'] = None
+
     # Classificar COM NF / SEM NF
     tipos_com_nf = ['NF', 'NFE', 'NFSE', 'NDF', 'FT']
     df_contas['COM_NF'] = df_contas['TIPO'].isin(tipos_com_nf)
     df_contas['TIPO_DOC'] = df_contas['COM_NF'].map({True: 'Com NF', False: 'Sem NF'})
+
+    # Padronizar formas de pagamento
+    if 'DESCRICAO_FORMA_PAGAMENTO' in df_contas.columns:
+        df_contas['DESCRICAO_FORMA_PAGAMENTO'] = padronizar_forma_pagamento(df_contas['DESCRICAO_FORMA_PAGAMENTO'])
 
     # Alerta NF entrada < 48h do vencimento
     if 'DIF_HORAS_DATAS' in df_contas.columns:

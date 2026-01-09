@@ -1,426 +1,495 @@
 """
-Aba Análise Cambial - Exposição e variação cambial (USD, EUR)
+Aba Variacao Cambial - Analise de operacoes em moeda estrangeira
+Foco em Bancos, Dolar, Natureza, Principal, Juros e Variacao
 """
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
-import plotly.express as px
 from datetime import datetime
 
-from config.theme import get_cores, get_sequencia_cores
+from config.theme import get_cores
 from components.charts import criar_layout
 from utils.formatters import formatar_moeda, formatar_numero
 
 
-def render_cambio(df):
-    """Renderiza a aba de Análise Cambial"""
-    cores = get_cores()
-    seq_cores = get_sequencia_cores()
-
-    st.markdown("### Análise Cambial")
-    st.caption("Exposição a moedas estrangeiras e variação cambial")
-
-    # Verificar se as colunas existem
-    if 'MOEDA' not in df.columns:
-        st.warning("Dados de moeda não disponíveis.")
-        return
-
-    # Separar por moeda
-    df_brl = df[df['MOEDA'] == 'REAL']
-    df_usd = df[df['MOEDA'].isin(['DOLAR COMPRA', 'DOLAR VENDA', 'USD', 'DÓLAR'])]
-    df_eur = df[df['MOEDA'].isin(['EURO', 'EUR'])]
-    df_outras = df[~df['MOEDA'].isin(['REAL', 'DOLAR COMPRA', 'DOLAR VENDA', 'USD', 'DÓLAR', 'EURO', 'EUR'])]
-
-    total_moeda_estrangeira = len(df_usd) + len(df_eur) + len(df_outras)
-
-    if total_moeda_estrangeira == 0:
-        st.info("Não há títulos em moeda estrangeira no período selecionado.")
-        return
-
-    # ========== SEÇÃO 1: RESUMO GERAL ==========
-    _render_resumo_cambial(df, df_brl, df_usd, df_eur, cores)
-
-    st.divider()
-
-    # ========== SEÇÃO 2: ANÁLISES DETALHADAS ==========
-    tab1, tab2, tab3 = st.tabs([
-        "📊 Exposição por Moeda",
-        "📈 Evolução Temporal",
-        "📋 Detalhamento"
-    ])
-
-    with tab1:
-        _render_exposicao(df, df_usd, df_eur, cores, seq_cores)
-
-    with tab2:
-        _render_evolucao_cambial(df, df_usd, df_eur, cores)
-
-    with tab3:
-        _render_detalhes_cambio(df, df_usd, df_eur, cores)
+# Padroes para identificar operacoes cambiais/financeiras
+MOEDAS_ESTRANGEIRAS = ['DOLAR COMPRA', 'DOLAR VENDA', 'EURO', 'DOLAR']
+NATUREZAS_FINANCEIRAS = [
+    'NATUREZA EMPRESTIMOS',
+    'EMPRESTIMOS - MUTUOS',
+    'EMPRESTIMOS-MUTUOS',
+    'JUROS AMORTIZACAO',
+    'JUROS',
+    'VARIACAO CAMBIAL',
+    'LEASING',
+    'FINANCIAMENTO'
+]
 
 
-def _render_resumo_cambial(df, df_brl, df_usd, df_eur, cores):
-    """Resumo geral da exposição cambial"""
+def identificar_operacoes_cambiais(df):
+    """Identifica operacoes em moeda estrangeira ou de natureza financeira"""
+    mask_moeda = df['MOEDA'].str.upper().isin([m.upper() for m in MOEDAS_ESTRANGEIRAS]) if 'MOEDA' in df.columns else pd.Series([False]*len(df))
 
-    st.markdown("#### Exposição Cambial")
+    mask_natureza = pd.Series([False]*len(df))
+    if 'DESCRICAO' in df.columns:
+        for nat in NATUREZAS_FINANCEIRAS:
+            mask_natureza |= df['DESCRICAO'].str.upper().str.contains(nat, na=False)
 
-    # Calcular totais
-    total_brl = df_brl['VALOR_ORIGINAL'].sum() if len(df_brl) > 0 else 0
-    total_usd = df_usd['VALOR_ORIGINAL'].sum() if len(df_usd) > 0 else 0
-    total_usd_real = df_usd['VALOR_REAL'].sum() if len(df_usd) > 0 and 'VALOR_REAL' in df_usd.columns else total_usd
-    total_eur = df_eur['VALOR_ORIGINAL'].sum() if len(df_eur) > 0 else 0
-    total_eur_real = df_eur['VALOR_REAL'].sum() if len(df_eur) > 0 and 'VALOR_REAL' in df_eur.columns else total_eur
+    return df[mask_moeda | mask_natureza].copy()
 
-    total_geral = df['VALOR_ORIGINAL'].sum()
-    exposicao_cambial = total_usd + total_eur
-    pct_exposicao = (exposicao_cambial / total_geral * 100) if total_geral > 0 else 0
 
-    # Taxa média USD
-    if len(df_usd) > 0 and 'TX_MOEDA' in df_usd.columns:
-        df_usd_valido = df_usd[df_usd['TX_MOEDA'] > 0]
-        taxa_media_usd = df_usd_valido['TX_MOEDA'].mean() if len(df_usd_valido) > 0 else 0
+def classificar_tipo_operacao(row):
+    """Classifica o tipo de operacao cambial/financeira"""
+    descricao = str(row.get('DESCRICAO', '')).upper()
+    moeda = str(row.get('MOEDA', '')).upper()
+
+    if 'JUROS' in descricao:
+        return 'Juros'
+    elif 'VARIACAO' in descricao:
+        return 'Variacao Cambial'
+    elif 'EMPRESTIMO' in descricao or 'MUTUO' in descricao:
+        return 'Principal (Emprestimo)'
+    elif 'LEASING' in descricao:
+        return 'Leasing'
+    elif 'FINANCIAMENTO' in descricao:
+        return 'Financiamento'
+    elif moeda in ['DOLAR COMPRA', 'DOLAR VENDA', 'DOLAR', 'EURO']:
+        return 'Operacao em Moeda Estrangeira'
     else:
-        taxa_media_usd = 0
+        return 'Outros'
 
-    # Variação cambial
-    variacao_usd = df_usd['VALOR_CORRECAO'].sum() if len(df_usd) > 0 and 'VALOR_CORRECAO' in df_usd.columns else 0
-    variacao_eur = df_eur['VALOR_CORRECAO'].sum() if len(df_eur) > 0 and 'VALOR_CORRECAO' in df_eur.columns else 0
-    variacao_total = variacao_usd + variacao_eur
 
-    # KPIs
+def render_cambio(df_contas):
+    """Renderiza a aba de Variacao Cambial"""
+    cores = get_cores()
+    hoje = datetime.now()
+
+    st.markdown("### Variacao Cambial e Operacoes Financeiras")
+    st.caption("Analise de operacoes em moeda estrangeira, emprestimos bancarios, juros e variacao cambial")
+
+    df_cambio = identificar_operacoes_cambiais(df_contas)
+
+    if len(df_cambio) == 0:
+        st.warning("Nenhuma operacao cambial ou financeira encontrada no periodo selecionado.")
+        return
+
+    df_cambio['TIPO_OPERACAO'] = df_cambio.apply(classificar_tipo_operacao, axis=1)
+
+    # ========== RESUMO GERAL ==========
+    st.markdown("#### Resumo Geral")
+
+    total_cambio = df_cambio['VALOR_ORIGINAL'].sum()
+    total_geral = df_contas['VALOR_ORIGINAL'].sum()
+    pct_cambio = (total_cambio / total_geral * 100) if total_geral > 0 else 0
+
+    saldo_cambio = df_cambio['SALDO'].sum()
+
+    df_principal = df_cambio[df_cambio['TIPO_OPERACAO'].str.contains('Principal|Emprestimo|Financiamento|Leasing', na=False, regex=True)]
+    df_juros = df_cambio[df_cambio['TIPO_OPERACAO'] == 'Juros']
+    df_variacao = df_cambio[df_cambio['TIPO_OPERACAO'] == 'Variacao Cambial']
+
+    total_principal = df_principal['VALOR_ORIGINAL'].sum()
+    total_juros = df_juros['VALOR_ORIGINAL'].sum()
+    total_variacao = df_variacao['VALOR_ORIGINAL'].sum()
+
     col1, col2, col3, col4, col5 = st.columns(5)
 
-    col1.metric(
-        "Total em Real (BRL)",
-        formatar_moeda(total_brl),
-        delta=f"{len(df_brl)} títulos",
-        delta_color="off"
-    )
+    col1.metric("Total Operacoes", formatar_moeda(total_cambio), delta=f"{pct_cambio:.1f}% do total geral")
+    col2.metric("Principal", formatar_moeda(total_principal), help="Emprestimos, financiamentos e leasing")
+    col3.metric("Juros", formatar_moeda(total_juros), delta_color="inverse")
+    col4.metric("Variacao Cambial", formatar_moeda(total_variacao))
+    col5.metric("Saldo Pendente", formatar_moeda(saldo_cambio), delta_color="inverse" if saldo_cambio > 0 else "normal")
 
-    col2.metric(
-        "Total em Dólar (USD)",
-        formatar_moeda(total_usd),
-        delta=f"{len(df_usd)} títulos",
-        delta_color="off"
-    )
-
-    col3.metric(
-        "Total em Euro (EUR)",
-        formatar_moeda(total_eur),
-        delta=f"{len(df_eur)} títulos",
-        delta_color="off"
-    )
-
-    col4.metric(
-        "Exposição Cambial",
-        f"{pct_exposicao:.1f}%",
-        delta=formatar_moeda(exposicao_cambial),
-        delta_color="off"
-    )
-
-    col5.metric(
-        "Variação Cambial",
-        formatar_moeda(abs(variacao_total)),
-        delta="Ganho" if variacao_total < 0 else "Perda",
-        delta_color="normal" if variacao_total < 0 else "inverse"
-    )
-
-    # Segunda linha de KPIs
     st.markdown("---")
 
-    col1, col2, col3, col4 = st.columns(4)
-
-    col1.metric(
-        "Taxa Média USD",
-        f"R$ {taxa_media_usd:.4f}" if taxa_media_usd > 0 else "N/A",
-        help="Taxa média de conversão USD/BRL"
-    )
-
-    col2.metric(
-        "USD em Reais",
-        formatar_moeda(total_usd_real),
-        help="Valor em Reais dos títulos em dólar"
-    )
-
-    col3.metric(
-        "EUR em Reais",
-        formatar_moeda(total_eur_real),
-        help="Valor em Reais dos títulos em euro"
-    )
-
-    # Alerta de exposição
-    if pct_exposicao > 20:
-        col4.error(f"⚠️ Alta exposição cambial!")
-    elif pct_exposicao > 10:
-        col4.warning(f"⚡ Exposição moderada")
-    else:
-        col4.success(f"✅ Exposição controlada")
-
-
-def _render_exposicao(df, df_usd, df_eur, cores, seq_cores):
-    """Gráficos de exposição por moeda"""
+    # ========== ANALISE POR MOEDA ==========
+    st.markdown("#### Analise por Moeda")
 
     col1, col2 = st.columns(2)
 
     with col1:
-        st.markdown("##### Distribuição por Moeda")
+        if 'MOEDA' in df_cambio.columns:
+            df_moeda = df_cambio.groupby('MOEDA').agg({
+                'VALOR_ORIGINAL': 'sum',
+                'SALDO': 'sum',
+                'FORNECEDOR': 'count'
+            }).reset_index()
+            df_moeda.columns = ['Moeda', 'Total', 'Saldo', 'Qtd']
+            df_moeda = df_moeda.sort_values('Total', ascending=False)
 
-        # Agrupar por moeda
-        df_moedas = df.groupby('MOEDA').agg({
-            'VALOR_ORIGINAL': 'sum',
-            'FORNECEDOR': 'count'
-        }).reset_index()
-        df_moedas.columns = ['Moeda', 'Valor', 'Qtd']
-        df_moedas = df_moedas.sort_values('Valor', ascending=False)
+            cores_moeda = {
+                'DOLAR COMPRA': cores['sucesso'],
+                'DOLAR VENDA': cores['alerta'],
+                'EURO': cores['info'],
+                'REAL': cores['primaria']
+            }
 
-        cores_moedas = {
-            'REAL': cores['primaria'],
-            'DOLAR COMPRA': cores['info'],
-            'DOLAR VENDA': '#3b82f6',
-            'EURO': cores['alerta']
-        }
+            fig = go.Figure(data=[go.Pie(
+                labels=df_moeda['Moeda'],
+                values=df_moeda['Total'],
+                hole=0.5,
+                marker_colors=[cores_moeda.get(m, cores['info']) for m in df_moeda['Moeda']],
+                textinfo='percent+label',
+                textfont_size=11
+            )])
 
-        fig = go.Figure(go.Pie(
-            labels=df_moedas['Moeda'],
-            values=df_moedas['Valor'],
-            hole=0.5,
-            marker=dict(colors=[cores_moedas.get(m, cores['texto_secundario']) for m in df_moedas['Moeda']]),
-            textinfo='percent+label',
-            textposition='outside',
-            textfont=dict(size=10),
-            hovertemplate='<b>%{label}</b><br>Valor: R$ %{value:,.2f}<br>%{percent}<extra></extra>'
+            fig.update_layout(criar_layout(320), showlegend=False, margin=dict(l=10, r=10, t=10, b=10))
+            st.plotly_chart(fig, use_container_width=True)
+
+            df_moeda_exib = pd.DataFrame({
+                'Moeda': df_moeda['Moeda'],
+                'Total': df_moeda['Total'].apply(lambda x: formatar_moeda(x, completo=True)),
+                'Saldo': df_moeda['Saldo'].apply(lambda x: formatar_moeda(x, completo=True)),
+                'Qtd Titulos': df_moeda['Qtd']
+            })
+            st.dataframe(df_moeda_exib, use_container_width=True, hide_index=True)
+        else:
+            st.info("Coluna MOEDA nao disponivel nos dados.")
+
+    with col2:
+        if 'TX_MOEDA' in df_cambio.columns:
+            st.markdown("##### Taxa de Cambio")
+
+            df_tx = df_cambio[df_cambio['TX_MOEDA'] > 0].copy()
+            if len(df_tx) > 0:
+                df_tx['MES_ANO'] = df_tx['EMISSAO'].dt.to_period('M')
+                df_tx_mensal = df_tx.groupby('MES_ANO').agg({'TX_MOEDA': 'mean'}).reset_index()
+                df_tx_mensal['MES_ANO'] = df_tx_mensal['MES_ANO'].astype(str)
+                df_tx_mensal = df_tx_mensal.tail(12)
+
+                fig = go.Figure()
+                fig.add_trace(go.Scatter(
+                    x=df_tx_mensal['MES_ANO'],
+                    y=df_tx_mensal['TX_MOEDA'],
+                    mode='lines+markers',
+                    line=dict(color=cores['primaria'], width=2),
+                    marker=dict(size=8)
+                ))
+                fig.update_layout(criar_layout(250), xaxis_tickangle=-45, yaxis_title='Taxa (R$)', margin=dict(l=50, r=10, t=10, b=60))
+                st.plotly_chart(fig, use_container_width=True)
+
+                tx_atual = df_tx_mensal['TX_MOEDA'].iloc[-1] if len(df_tx_mensal) > 0 else 0
+                tx_media = df_tx['TX_MOEDA'].mean()
+
+                col_a, col_b = st.columns(2)
+                col_a.metric("Taxa Atual", f"R$ {tx_atual:.4f}")
+                col_b.metric("Taxa Media", f"R$ {tx_media:.4f}")
+            else:
+                st.info("Sem dados de taxa de cambio.")
+        else:
+            st.info("Coluna TX_MOEDA nao disponivel.")
+
+    st.markdown("---")
+
+    # ========== TABS DETALHADAS ==========
+    tab1, tab2, tab3, tab4 = st.tabs(["Por Banco/Fornecedor", "Por Natureza", "Evolucao", "Detalhes"])
+
+    with tab1:
+        _render_por_banco(df_cambio, cores)
+
+    with tab2:
+        _render_por_natureza(df_cambio, cores)
+
+    with tab3:
+        _render_evolucao_cambio(df_cambio, cores)
+
+    with tab4:
+        _render_detalhes_cambio(df_cambio, cores, hoje)
+
+
+def _render_por_banco(df_cambio, cores):
+    """Analise por banco/fornecedor"""
+    df_banco = df_cambio.groupby('NOME_FORNECEDOR').agg({
+        'VALOR_ORIGINAL': 'sum',
+        'SALDO': 'sum',
+        'FORNECEDOR': 'count'
+    }).reset_index()
+    df_banco.columns = ['Banco/Fornecedor', 'Total', 'Saldo', 'Qtd']
+    df_banco['Pago'] = df_banco['Total'] - df_banco['Saldo']
+    df_banco['% Pago'] = ((df_banco['Pago'] / df_banco['Total']) * 100).fillna(0).round(1)
+    df_banco = df_banco.sort_values('Total', ascending=False)
+
+    col1, col2 = st.columns([2, 1])
+
+    with col1:
+        st.markdown("##### Top 15 Bancos/Fornecedores")
+        df_top = df_banco.head(15)
+
+        fig = go.Figure()
+        fig.add_trace(go.Bar(
+            y=df_top['Banco/Fornecedor'].str[:30],
+            x=df_top['Pago'],
+            orientation='h',
+            name='Pago',
+            marker_color=cores['primaria'],
+            text=[formatar_moeda(v) for v in df_top['Pago']],
+            textposition='inside',
+            textfont=dict(size=9, color='white')
+        ))
+
+        fig.add_trace(go.Bar(
+            y=df_top['Banco/Fornecedor'].str[:30],
+            x=df_top['Saldo'],
+            orientation='h',
+            name='Pendente',
+            marker_color=cores['alerta'],
+            text=[formatar_moeda(v) for v in df_top['Saldo']],
+            textposition='inside',
+            textfont=dict(size=9, color='white')
         ))
 
         fig.update_layout(
-            criar_layout(350),
-            showlegend=False,
-            margin=dict(l=20, r=20, t=20, b=20)
+            criar_layout(450, barmode='stack'),
+            yaxis={'autorange': 'reversed'},
+            legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='center', x=0.5),
+            margin=dict(l=10, r=10, t=40, b=10)
         )
-
         st.plotly_chart(fig, use_container_width=True)
 
     with col2:
-        st.markdown("##### Quantidade de Títulos por Moeda")
+        st.markdown("##### Resumo")
+        st.metric("Total de Fornecedores", len(df_banco))
+        st.metric("Valor Total", formatar_moeda(df_banco['Total'].sum()))
+        st.metric("Saldo Pendente", formatar_moeda(df_banco['Saldo'].sum()))
 
-        fig2 = go.Figure()
+    st.markdown("##### Tabela Completa")
+    df_exib = pd.DataFrame({
+        'Banco/Fornecedor': df_banco['Banco/Fornecedor'],
+        'Total': df_banco['Total'].apply(lambda x: formatar_moeda(x, completo=True)),
+        'Pago': df_banco['Pago'].apply(lambda x: formatar_moeda(x, completo=True)),
+        'Saldo': df_banco['Saldo'].apply(lambda x: formatar_moeda(x, completo=True)),
+        'Qtd': df_banco['Qtd'],
+        '% Pago': df_banco['% Pago']
+    })
+    st.dataframe(df_exib, use_container_width=True, hide_index=True, height=350,
+        column_config={'% Pago': st.column_config.ProgressColumn('% Pago', format='%.0f%%', min_value=0, max_value=100)})
 
-        fig2.add_trace(go.Bar(
-            y=df_moedas['Moeda'],
-            x=df_moedas['Qtd'],
-            orientation='h',
-            marker_color=[cores_moedas.get(m, cores['texto_secundario']) for m in df_moedas['Moeda']],
-            text=[f"{q:,}" for q in df_moedas['Qtd']],
-            textposition='outside'
-        ))
 
-        fig2.update_layout(
-            criar_layout(350),
-            yaxis={'autorange': 'reversed'},
-            margin=dict(l=10, r=10, t=20, b=30)
-        )
+def _render_por_natureza(df_cambio, cores):
+    """Analise por natureza/categoria"""
+    df_tipo = df_cambio.groupby('TIPO_OPERACAO').agg({
+        'VALOR_ORIGINAL': 'sum',
+        'SALDO': 'sum',
+        'FORNECEDOR': 'count'
+    }).reset_index()
+    df_tipo.columns = ['Tipo', 'Total', 'Saldo', 'Qtd']
+    df_tipo = df_tipo.sort_values('Total', ascending=False)
 
-        st.plotly_chart(fig2, use_container_width=True)
+    col1, col2 = st.columns(2)
 
-    # Top fornecedores em moeda estrangeira
-    if len(df_usd) > 0:
-        st.markdown("##### Top Fornecedores em Dólar (USD)")
+    cores_tipo = {
+        'Principal (Emprestimo)': cores['primaria'],
+        'Juros': cores['perigo'],
+        'Variacao Cambial': cores['alerta'],
+        'Leasing': cores['info'],
+        'Financiamento': cores['sucesso'],
+        'Operacao em Moeda Estrangeira': '#9333ea',
+        'Outros': cores['texto_secundario']
+    }
 
-        df_forn_usd = df_usd.groupby('NOME_FORNECEDOR').agg({
-            'VALOR_ORIGINAL': 'sum',
-            'VALOR_REAL': 'sum',
-            'FORNECEDOR': 'count'
-        }).reset_index()
-        df_forn_usd.columns = ['Fornecedor', 'Valor_USD', 'Valor_BRL', 'Qtd']
-        df_forn_usd = df_forn_usd.sort_values('Valor_USD', ascending=False).head(10)
-
-        fig3 = go.Figure()
-
-        fig3.add_trace(go.Bar(
-            y=df_forn_usd['Fornecedor'].str[:30],
-            x=df_forn_usd['Valor_USD'],
-            orientation='h',
-            name='Valor Original',
-            marker_color=cores['info'],
-            text=[formatar_moeda(v) for v in df_forn_usd['Valor_USD']],
+    with col1:
+        st.markdown("##### Por Tipo de Operacao")
+        fig = go.Figure()
+        fig.add_trace(go.Bar(
+            x=df_tipo['Tipo'],
+            y=df_tipo['Total'],
+            marker_color=[cores_tipo.get(t, cores['info']) for t in df_tipo['Tipo']],
+            text=[formatar_moeda(v) for v in df_tipo['Total']],
             textposition='outside',
             textfont=dict(size=9)
         ))
-
-        fig3.update_layout(
-            criar_layout(350),
-            yaxis={'autorange': 'reversed'},
-            margin=dict(l=10, r=10, t=20, b=10)
-        )
-
-        st.plotly_chart(fig3, use_container_width=True)
-
-
-def _render_evolucao_cambial(df, df_usd, df_eur, cores):
-    """Evolução temporal da exposição cambial"""
-
-    st.markdown("##### Evolução Mensal por Moeda")
-
-    df_temp = df.copy()
-    df_temp['MES_ANO'] = df_temp['EMISSAO'].dt.to_period('M')
-
-    df_mensal = df_temp.groupby(['MES_ANO', 'MOEDA']).agg({
-        'VALOR_ORIGINAL': 'sum',
-        'TX_MOEDA': 'mean'
-    }).reset_index()
-    df_mensal.columns = ['Período', 'Moeda', 'Valor', 'Taxa_Media']
-    df_mensal['Período'] = df_mensal['Período'].astype(str)
-    df_mensal = df_mensal[df_mensal['Período'].isin(df_mensal['Período'].unique()[-12:])]
-
-    # Gráfico de evolução
-    fig = go.Figure()
-
-    cores_moedas = {
-        'REAL': cores['primaria'],
-        'DOLAR COMPRA': cores['info'],
-        'DOLAR VENDA': '#60a5fa',
-        'EURO': cores['alerta']
-    }
-
-    for moeda in df_mensal['Moeda'].unique():
-        df_moeda = df_mensal[df_mensal['Moeda'] == moeda]
-        fig.add_trace(go.Scatter(
-            x=df_moeda['Período'],
-            y=df_moeda['Valor'],
-            mode='lines+markers',
-            name=moeda,
-            line=dict(width=2, color=cores_moedas.get(moeda, cores['texto_secundario'])),
-            marker=dict(size=6)
-        ))
-
-    fig.update_layout(
-        criar_layout(400),
-        xaxis_tickangle=-45,
-        legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='center', x=0.5),
-        margin=dict(l=10, r=10, t=50, b=60)
-    )
-
-    st.plotly_chart(fig, use_container_width=True)
-
-    # Evolução da taxa de câmbio USD
-    if len(df_usd) > 0 and 'TX_MOEDA' in df_usd.columns:
-        st.markdown("##### Evolução da Taxa de Câmbio USD")
-
-        df_taxa = df_mensal[(df_mensal['Moeda'].isin(['DOLAR COMPRA', 'DOLAR VENDA'])) & (df_mensal['Taxa_Media'] > 0)]
-
-        if len(df_taxa) > 0:
-            fig2 = go.Figure()
-
-            for moeda in df_taxa['Moeda'].unique():
-                df_m = df_taxa[df_taxa['Moeda'] == moeda]
-                fig2.add_trace(go.Scatter(
-                    x=df_m['Período'],
-                    y=df_m['Taxa_Media'],
-                    mode='lines+markers+text',
-                    name=moeda,
-                    line=dict(width=2),
-                    text=[f"R$ {t:.2f}" for t in df_m['Taxa_Media']],
-                    textposition='top center',
-                    textfont=dict(size=9)
-                ))
-
-            fig2.update_layout(
-                criar_layout(300),
-                xaxis_tickangle=-45,
-                yaxis_title='Taxa R$/USD',
-                legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='center', x=0.5),
-                margin=dict(l=10, r=10, t=50, b=60)
-            )
-
-            st.plotly_chart(fig2, use_container_width=True)
-
-
-def _render_detalhes_cambio(df, df_usd, df_eur, cores):
-    """Tabela detalhada de títulos em moeda estrangeira"""
-
-    st.markdown("##### Títulos em Moeda Estrangeira")
-
-    # Filtrar apenas moeda estrangeira
-    df_estrang = df[~df['MOEDA'].isin(['REAL', 'BRL'])]
-
-    if len(df_estrang) == 0:
-        st.info("Nenhum título em moeda estrangeira.")
-        return
-
-    # Filtros
-    col1, col2, col3 = st.columns(3)
-
-    with col1:
-        moedas = ['Todas'] + sorted(df_estrang['MOEDA'].unique().tolist())
-        moeda_sel = st.selectbox("Moeda:", moedas, key="moeda_filter")
+        fig.update_layout(criar_layout(320), xaxis_tickangle=-30, margin=dict(l=10, r=10, t=10, b=80))
+        st.plotly_chart(fig, use_container_width=True)
 
     with col2:
-        ordenar = st.selectbox(
-            "Ordenar por:",
-            ["Maior Valor", "Mais Recente", "Fornecedor A-Z"],
-            key="ordenar_cambio"
-        )
+        st.markdown("##### Distribuicao")
+        fig = go.Figure(data=[go.Pie(
+            labels=df_tipo['Tipo'],
+            values=df_tipo['Total'],
+            hole=0.5,
+            marker_colors=[cores_tipo.get(t, cores['info']) for t in df_tipo['Tipo']],
+            textinfo='percent',
+            textfont_size=11
+        )])
+        fig.update_layout(criar_layout(320), showlegend=True,
+            legend=dict(orientation='h', yanchor='top', y=-0.1, xanchor='center', x=0.5, font=dict(size=9)),
+            margin=dict(l=10, r=10, t=10, b=60))
+        st.plotly_chart(fig, use_container_width=True)
+
+    if 'DESCRICAO' in df_cambio.columns:
+        st.markdown("##### Por Categoria (DESCRICAO)")
+        df_cat = df_cambio.groupby('DESCRICAO').agg({
+            'VALOR_ORIGINAL': 'sum',
+            'SALDO': 'sum',
+            'FORNECEDOR': 'count'
+        }).reset_index()
+        df_cat.columns = ['Categoria', 'Total', 'Saldo', 'Qtd']
+        df_cat = df_cat.sort_values('Total', ascending=False).head(10)
+
+        fig = go.Figure()
+        fig.add_trace(go.Bar(
+            y=df_cat['Categoria'].str[:35],
+            x=df_cat['Total'],
+            orientation='h',
+            marker_color=cores['primaria'],
+            text=[formatar_moeda(v) for v in df_cat['Total']],
+            textposition='outside',
+            textfont=dict(size=9)
+        ))
+        fig.update_layout(criar_layout(350), yaxis={'autorange': 'reversed'}, margin=dict(l=10, r=70, t=10, b=10))
+        st.plotly_chart(fig, use_container_width=True)
+
+
+def _render_evolucao_cambio(df_cambio, cores):
+    """Evolucao temporal das operacoes cambiais"""
+    df_temp = df_cambio.copy()
+    df_temp['MES_ANO'] = df_temp['EMISSAO'].dt.to_period('M')
+
+    df_mensal = df_temp.groupby('MES_ANO').agg({
+        'VALOR_ORIGINAL': 'sum',
+        'SALDO': 'sum',
+        'FORNECEDOR': 'count'
+    }).reset_index()
+    df_mensal['MES_ANO'] = df_mensal['MES_ANO'].astype(str)
+    df_mensal.columns = ['Periodo', 'Total', 'Saldo', 'Qtd']
+    df_mensal = df_mensal.tail(12)
+
+    st.markdown("##### Evolucao Mensal")
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        fig = go.Figure()
+        fig.add_trace(go.Bar(
+            x=df_mensal['Periodo'],
+            y=df_mensal['Total'],
+            marker_color=cores['primaria'],
+            text=[formatar_moeda(v) for v in df_mensal['Total']],
+            textposition='outside',
+            textfont=dict(size=8)
+        ))
+        fig.update_layout(criar_layout(300), xaxis_tickangle=-45, margin=dict(l=10, r=10, t=10, b=60))
+        st.plotly_chart(fig, use_container_width=True)
+
+    with col2:
+        df_tipo_mensal = df_temp.groupby(['MES_ANO', 'TIPO_OPERACAO'])['VALOR_ORIGINAL'].sum().reset_index()
+        df_tipo_mensal['MES_ANO'] = df_tipo_mensal['MES_ANO'].astype(str)
+        meses_unicos = sorted(df_tipo_mensal['MES_ANO'].unique())[-12:]
+        df_tipo_mensal = df_tipo_mensal[df_tipo_mensal['MES_ANO'].isin(meses_unicos)]
+
+        fig = go.Figure()
+        for tipo in df_tipo_mensal['TIPO_OPERACAO'].unique():
+            df_t = df_tipo_mensal[df_tipo_mensal['TIPO_OPERACAO'] == tipo]
+            fig.add_trace(go.Scatter(x=df_t['MES_ANO'], y=df_t['VALOR_ORIGINAL'], mode='lines+markers', name=tipo[:20], line=dict(width=2)))
+        fig.update_layout(criar_layout(300), xaxis_tickangle=-45,
+            legend=dict(orientation='h', yanchor='top', y=-0.2, xanchor='center', x=0.5, font=dict(size=8)),
+            margin=dict(l=10, r=10, t=10, b=80))
+        st.plotly_chart(fig, use_container_width=True)
+
+    st.markdown("##### Resumo por Ano")
+    df_ano = df_temp.groupby(df_temp['EMISSAO'].dt.year).agg({
+        'VALOR_ORIGINAL': 'sum',
+        'SALDO': 'sum',
+        'FORNECEDOR': 'count'
+    }).reset_index()
+    df_ano.columns = ['Ano', 'Total', 'Saldo', 'Qtd']
+    df_ano['Pago'] = df_ano['Total'] - df_ano['Saldo']
+
+    df_ano_exib = pd.DataFrame({
+        'Ano': df_ano['Ano'].astype(int),
+        'Total': df_ano['Total'].apply(lambda x: formatar_moeda(x, completo=True)),
+        'Pago': df_ano['Pago'].apply(lambda x: formatar_moeda(x, completo=True)),
+        'Saldo': df_ano['Saldo'].apply(lambda x: formatar_moeda(x, completo=True)),
+        'Qtd Titulos': df_ano['Qtd']
+    })
+    st.dataframe(df_ano_exib, use_container_width=True, hide_index=True)
+
+
+def _render_detalhes_cambio(df_cambio, cores, hoje):
+    """Detalhes das operacoes cambiais"""
+    col1, col2, col3, col4 = st.columns(4)
+
+    with col1:
+        tipos = ['Todos'] + sorted(df_cambio['TIPO_OPERACAO'].unique().tolist())
+        filtro_tipo = st.selectbox("Tipo Operacao", tipos, key="cambio_tipo")
+
+    with col2:
+        if 'MOEDA' in df_cambio.columns:
+            moedas = ['Todas'] + sorted(df_cambio['MOEDA'].dropna().unique().tolist())
+            filtro_moeda = st.selectbox("Moeda", moedas, key="cambio_moeda")
+        else:
+            filtro_moeda = 'Todas'
 
     with col3:
-        limite = st.selectbox(
-            "Exibir:",
-            ["50 primeiros", "100 primeiros", "Todos"],
-            key="limite_cambio"
-        )
+        filtro_status = st.selectbox("Status", ['Todos', 'Pendente', 'Pago', 'Vencido'], key="cambio_status")
 
-    # Aplicar filtros
-    df_filtrado = df_estrang.copy()
+    with col4:
+        ordem = st.selectbox("Ordenar", ["Maior Valor", "Mais Recente", "Fornecedor A-Z"], key="cambio_ordem")
 
-    if moeda_sel != 'Todas':
-        df_filtrado = df_filtrado[df_filtrado['MOEDA'] == moeda_sel]
+    df_show = df_cambio.copy()
 
-    # Ordenar
-    if ordenar == "Maior Valor":
-        df_filtrado = df_filtrado.sort_values('VALOR_ORIGINAL', ascending=False)
-    elif ordenar == "Mais Recente":
-        df_filtrado = df_filtrado.sort_values('EMISSAO', ascending=False)
+    if filtro_tipo != 'Todos':
+        df_show = df_show[df_show['TIPO_OPERACAO'] == filtro_tipo]
+
+    if filtro_moeda != 'Todas' and 'MOEDA' in df_show.columns:
+        df_show = df_show[df_show['MOEDA'] == filtro_moeda]
+
+    if filtro_status == 'Pendente':
+        df_show = df_show[df_show['SALDO'] > 0]
+    elif filtro_status == 'Pago':
+        df_show = df_show[df_show['SALDO'] == 0]
+    elif filtro_status == 'Vencido':
+        df_show = df_show[df_show['STATUS'] == 'Vencido']
+
+    if ordem == "Maior Valor":
+        df_show = df_show.sort_values('VALOR_ORIGINAL', ascending=False)
+    elif ordem == "Mais Recente":
+        df_show = df_show.sort_values('EMISSAO', ascending=False)
     else:
-        df_filtrado = df_filtrado.sort_values('NOME_FORNECEDOR')
+        df_show = df_show.sort_values('NOME_FORNECEDOR')
 
-    # Limitar
-    if limite == "50 primeiros":
-        df_filtrado = df_filtrado.head(50)
-    elif limite == "100 primeiros":
-        df_filtrado = df_filtrado.head(100)
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("Titulos", formatar_numero(len(df_show)))
+    col2.metric("Total", formatar_moeda(df_show['VALOR_ORIGINAL'].sum()))
+    col3.metric("Saldo", formatar_moeda(df_show['SALDO'].sum()))
+    col4.metric("Vencidos", formatar_numero(len(df_show[df_show['STATUS'] == 'Vencido'])))
 
-    # Preparar exibição
-    colunas = ['NOME_FORNECEDOR', 'MOEDA', 'TX_MOEDA', 'EMISSAO', 'VENCIMENTO',
-               'VALOR_ORIGINAL', 'VALOR_REAL', 'VALOR_CORRECAO', 'SALDO']
+    st.markdown("---")
 
-    colunas_disp = [c for c in colunas if c in df_filtrado.columns]
-    df_exibir = df_filtrado[colunas_disp].copy()
+    colunas_base = ['NOME_FILIAL', 'NOME_FORNECEDOR', 'TIPO_OPERACAO', 'EMISSAO', 'VENCIMENTO', 'VALOR_ORIGINAL', 'SALDO', 'STATUS']
+    colunas_extra = []
+    if 'MOEDA' in df_show.columns:
+        colunas_extra.append('MOEDA')
+    if 'TX_MOEDA' in df_show.columns:
+        colunas_extra.append('TX_MOEDA')
 
-    # Renomear
+    colunas = [c for c in colunas_base + colunas_extra if c in df_show.columns]
+    df_exib = df_show[colunas].head(100).copy()
+
+    if 'EMISSAO' in df_exib.columns:
+        df_exib['EMISSAO'] = pd.to_datetime(df_exib['EMISSAO']).dt.strftime('%d/%m/%Y')
+    if 'VENCIMENTO' in df_exib.columns:
+        df_exib['VENCIMENTO'] = pd.to_datetime(df_exib['VENCIMENTO']).dt.strftime('%d/%m/%Y')
+    if 'VALOR_ORIGINAL' in df_exib.columns:
+        df_exib['VALOR_ORIGINAL'] = df_exib['VALOR_ORIGINAL'].apply(lambda x: formatar_moeda(x, completo=True))
+    if 'SALDO' in df_exib.columns:
+        df_exib['SALDO'] = df_exib['SALDO'].apply(lambda x: formatar_moeda(x, completo=True))
+    if 'TX_MOEDA' in df_exib.columns:
+        df_exib['TX_MOEDA'] = df_exib['TX_MOEDA'].apply(lambda x: f"R$ {x:.4f}" if pd.notna(x) and x > 0 else '-')
+
     rename_map = {
-        'NOME_FORNECEDOR': 'Fornecedor',
-        'MOEDA': 'Moeda',
-        'TX_MOEDA': 'Taxa Câmbio',
-        'EMISSAO': 'Emissão',
+        'NOME_FILIAL': 'Filial',
+        'NOME_FORNECEDOR': 'Banco/Fornecedor',
+        'TIPO_OPERACAO': 'Tipo',
+        'EMISSAO': 'Emissao',
         'VENCIMENTO': 'Vencimento',
-        'VALOR_ORIGINAL': 'Valor Original',
-        'VALOR_REAL': 'Valor em Reais',
-        'VALOR_CORRECAO': 'Variação Cambial',
-        'SALDO': 'Saldo'
+        'VALOR_ORIGINAL': 'Valor',
+        'SALDO': 'Saldo',
+        'STATUS': 'Status',
+        'MOEDA': 'Moeda',
+        'TX_MOEDA': 'Taxa'
     }
-    df_exibir = df_exibir.rename(columns=rename_map)
+    df_exib = df_exib.rename(columns=rename_map)
 
-    # Formatar datas
-    if 'Emissão' in df_exibir.columns:
-        df_exibir['Emissão'] = pd.to_datetime(df_exibir['Emissão']).dt.strftime('%d/%m/%Y')
-    if 'Vencimento' in df_exibir.columns:
-        df_exibir['Vencimento'] = pd.to_datetime(df_exibir['Vencimento']).dt.strftime('%d/%m/%Y')
-
-    # Formatar valores
-    for col in ['Valor Original', 'Valor em Reais', 'Variação Cambial', 'Saldo']:
-        if col in df_exibir.columns:
-            df_exibir[col] = df_exibir[col].apply(lambda x: formatar_moeda(x, completo=True) if pd.notna(x) else 'R$ 0,00')
-
-    if 'Taxa Câmbio' in df_exibir.columns:
-        df_exibir['Taxa Câmbio'] = df_exibir['Taxa Câmbio'].apply(lambda x: f"R$ {x:.4f}" if pd.notna(x) and x > 0 else '-')
-
-    st.dataframe(df_exibir, use_container_width=True, hide_index=True, height=500)
-    st.caption(f"Exibindo {len(df_exibir)} títulos em moeda estrangeira")
+    st.dataframe(df_exib, use_container_width=True, hide_index=True, height=450)
+    st.caption(f"Exibindo {len(df_exib)} de {len(df_show)} registros")

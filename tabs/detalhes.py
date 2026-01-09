@@ -1,398 +1,491 @@
 """
-Aba Detalhes - Consulta avançada e drill-down de títulos
+Aba Detalhes - Consulta e busca avancada de titulos
+Foco: Busca, filtros avancados, tabela completa e exportacao
 """
 import streamlit as st
 import pandas as pd
-import plotly.graph_objects as go
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from config.theme import get_cores
-from components.charts import criar_layout
 from utils.formatters import formatar_moeda, formatar_numero, to_excel
 
 
 def render_detalhes(df):
-    """Renderiza a aba de Detalhes"""
+    """Renderiza a aba de Detalhes - Consulta de Titulos"""
     cores = get_cores()
     hoje = datetime.now()
 
-    st.markdown("### Consulta de Titulos")
-
     if len(df) == 0:
-        st.warning("Nenhum dado disponivel para consulta.")
+        st.warning("Nenhum dado disponivel.")
         return
 
-    # ========== FILTROS ==========
-    with st.container():
-        col1, col2, col3, col4, col5 = st.columns([1.5, 1.5, 1.5, 1.5, 1])
+    # ========== FILTROS AVANCADOS ==========
+    st.markdown("##### Filtros")
 
-        with col1:
-            filtro_status = st.multiselect(
-                "Status",
-                options=sorted(df['STATUS'].dropna().unique().tolist()),
-                default=[],
-                key="det_status",
-                placeholder="Todos"
-            )
+    # Linha 1: Filtros principais
+    col1, col2, col3, col4 = st.columns(4)
 
-        with col2:
-            filtro_filial = st.multiselect(
-                "Filial",
-                options=sorted(df['NOME_FILIAL'].dropna().unique().tolist()),
-                default=[],
-                key="det_filial",
-                placeholder="Todas"
-            )
+    with col1:
+        filtro_status = st.multiselect(
+            "Status",
+            options=['Pago', 'Vencido', 'Vence em 7 dias', 'Vence em 15 dias', 'Vence em 30 dias', 'Vence em 60 dias', 'Vence em +60 dias'],
+            default=[],
+            key="det_status",
+            placeholder="Todos"
+        )
 
-        with col3:
-            filtro_categoria = st.multiselect(
-                "Categoria",
-                options=sorted(df['DESCRICAO'].dropna().unique().tolist()),
-                default=[],
-                key="det_categoria",
-                placeholder="Todas"
-            )
+    with col2:
+        filiais = sorted(df['NOME_FILIAL'].dropna().unique().tolist())
+        filtro_filial = st.multiselect(
+            "Filial",
+            options=filiais,
+            default=[],
+            key="det_filial",
+            placeholder="Todas"
+        )
 
-        with col4:
-            busca = st.text_input(
-                "Buscar fornecedor",
-                placeholder="Digite...",
-                key="det_busca"
-            )
+    with col3:
+        categorias = sorted(df['DESCRICAO'].dropna().unique().tolist())
+        filtro_categoria = st.multiselect(
+            "Categoria",
+            options=categorias,
+            default=[],
+            key="det_categoria",
+            placeholder="Todas"
+        )
 
-        with col5:
-            apenas_saldo = st.checkbox("Com saldo", value=False, key="det_saldo")
+    with col4:
+        formas_pagto = sorted(df['DESCRICAO_FORMA_PAGAMENTO'].dropna().unique().tolist()) if 'DESCRICAO_FORMA_PAGAMENTO' in df.columns else []
+        filtro_forma = st.multiselect(
+            "Forma Pagto",
+            options=formas_pagto,
+            default=[],
+            key="det_forma",
+            placeholder="Todas"
+        )
 
-    # Aplicar filtros
+    # Linha 2: Busca e filtros adicionais
+    col1, col2, col3, col4 = st.columns(4)
+
+    with col1:
+        busca_fornecedor = st.text_input(
+            "Buscar Fornecedor",
+            placeholder="Nome do fornecedor...",
+            key="det_busca_forn"
+        )
+
+    with col2:
+        busca_numero = st.text_input(
+            "Numero/Documento",
+            placeholder="NF, boleto...",
+            key="det_busca_num"
+        )
+
+    with col3:
+        filtro_tipo = st.radio(
+            "Mostrar",
+            ["Todos", "Com Saldo", "Pagos"],
+            horizontal=True,
+            key="det_tipo"
+        )
+
+    with col4:
+        filtro_tipo_doc = st.radio(
+            "Documento",
+            ["Todos", "Com NF", "Sem NF"],
+            horizontal=True,
+            key="det_tipo_doc"
+        )
+
+    # Linha 3: Filtros de valor e datas
+    col1, col2, col3, col4 = st.columns(4)
+
+    with col1:
+        valor_min = st.number_input(
+            "Valor Minimo",
+            min_value=0.0,
+            value=0.0,
+            step=1000.0,
+            key="det_valor_min"
+        )
+
+    with col2:
+        valor_max = st.number_input(
+            "Valor Maximo",
+            min_value=0.0,
+            value=0.0,
+            step=1000.0,
+            key="det_valor_max",
+            help="0 = sem limite"
+        )
+
+    with col3:
+        filtro_venc_inicio = st.date_input(
+            "Vencimento de",
+            value=None,
+            key="det_venc_inicio"
+        )
+
+    with col4:
+        filtro_venc_fim = st.date_input(
+            "Vencimento ate",
+            value=None,
+            key="det_venc_fim"
+        )
+
+    # ========== APLICAR FILTROS ==========
     df_filtrado = _aplicar_filtros(df)
 
-    # ========== RESUMO ==========
+    st.divider()
+
+    # ========== RESUMO DOS RESULTADOS ==========
     col1, col2, col3, col4, col5 = st.columns(5)
 
-    valor_total = df_filtrado['VALOR_ORIGINAL'].sum()
-    saldo_total = df_filtrado['SALDO'].sum()
-    qtd_vencidos = len(df_filtrado[df_filtrado['STATUS'] == 'Vencido'])
+    col1.metric("Titulos", formatar_numero(len(df_filtrado)))
+    col2.metric("Valor Total", formatar_moeda(df_filtrado['VALOR_ORIGINAL'].sum()))
+    col3.metric("Saldo", formatar_moeda(df_filtrado['SALDO'].sum()))
 
-    col1.metric("Títulos", formatar_numero(len(df_filtrado)))
-    col2.metric("Valor Total", formatar_moeda(valor_total))
-    col3.metric("Saldo Pendente", formatar_moeda(saldo_total))
+    qtd_vencidos = len(df_filtrado[df_filtrado['STATUS'] == 'Vencido'])
     col4.metric("Vencidos", formatar_numero(qtd_vencidos))
 
-    col5.download_button(
-        label="📥 Exportar",
-        data=to_excel(df_filtrado),
-        file_name=f"titulos_{hoje.strftime('%Y%m%d')}.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        use_container_width=True
-    )
+    qtd_fornecedores = df_filtrado['NOME_FORNECEDOR'].nunique()
+    col5.metric("Fornecedores", formatar_numero(qtd_fornecedores))
 
-    st.markdown("---")
-
-    # ========== CONTEÚDO ==========
-    tab1, tab2, tab3 = st.tabs(["📋 Títulos", "📊 Gráficos", "📈 Indicadores"])
+    # ========== TABS ==========
+    tab1, tab2, tab3 = st.tabs(["Titulos", "Por Fornecedor", "Exportar"])
 
     with tab1:
-        _render_tabela(df_filtrado)
+        _render_tabela_titulos(df_filtrado, cores, hoje)
 
     with tab2:
-        _render_graficos(df_filtrado, cores)
+        _render_por_fornecedor(df_filtrado, cores)
 
     with tab3:
-        _render_indicadores(df, cores)
+        _render_exportar(df_filtrado, hoje)
 
 
 def _aplicar_filtros(df):
-    """Aplica os filtros"""
+    """Aplica todos os filtros selecionados"""
     df_filtrado = df.copy()
 
+    # Status
     if st.session_state.get('det_status'):
         df_filtrado = df_filtrado[df_filtrado['STATUS'].isin(st.session_state.det_status)]
 
+    # Filial
     if st.session_state.get('det_filial'):
         df_filtrado = df_filtrado[df_filtrado['NOME_FILIAL'].isin(st.session_state.det_filial)]
 
+    # Categoria
     if st.session_state.get('det_categoria'):
         df_filtrado = df_filtrado[df_filtrado['DESCRICAO'].isin(st.session_state.det_categoria)]
 
-    busca = st.session_state.get('det_busca', '')
-    if busca:
+    # Forma de pagamento
+    if st.session_state.get('det_forma') and 'DESCRICAO_FORMA_PAGAMENTO' in df_filtrado.columns:
+        df_filtrado = df_filtrado[df_filtrado['DESCRICAO_FORMA_PAGAMENTO'].isin(st.session_state.det_forma)]
+
+    # Busca fornecedor
+    busca_forn = st.session_state.get('det_busca_forn', '')
+    if busca_forn:
         df_filtrado = df_filtrado[
-            df_filtrado['NOME_FORNECEDOR'].str.contains(busca, case=False, na=False)
+            df_filtrado['NOME_FORNECEDOR'].str.contains(busca_forn, case=False, na=False)
         ]
 
-    if st.session_state.get('det_saldo', False):
+    # Busca numero/documento
+    busca_num = st.session_state.get('det_busca_num', '')
+    if busca_num:
+        mask = pd.Series([False] * len(df_filtrado), index=df_filtrado.index)
+        if 'NUMERO' in df_filtrado.columns:
+            mask |= df_filtrado['NUMERO'].astype(str).str.contains(busca_num, case=False, na=False)
+        if 'DOCUMENTO' in df_filtrado.columns:
+            mask |= df_filtrado['DOCUMENTO'].astype(str).str.contains(busca_num, case=False, na=False)
+        df_filtrado = df_filtrado[mask]
+
+    # Tipo (saldo)
+    filtro_tipo = st.session_state.get('det_tipo', 'Todos')
+    if filtro_tipo == 'Com Saldo':
         df_filtrado = df_filtrado[df_filtrado['SALDO'] > 0]
+    elif filtro_tipo == 'Pagos':
+        df_filtrado = df_filtrado[df_filtrado['SALDO'] == 0]
+
+    # Tipo documento
+    filtro_tipo_doc = st.session_state.get('det_tipo_doc', 'Todos')
+    if filtro_tipo_doc != 'Todos' and 'TIPO_DOC' in df_filtrado.columns:
+        df_filtrado = df_filtrado[df_filtrado['TIPO_DOC'] == filtro_tipo_doc]
+
+    # Valor minimo
+    valor_min = st.session_state.get('det_valor_min', 0)
+    if valor_min > 0:
+        df_filtrado = df_filtrado[df_filtrado['VALOR_ORIGINAL'] >= valor_min]
+
+    # Valor maximo
+    valor_max = st.session_state.get('det_valor_max', 0)
+    if valor_max > 0:
+        df_filtrado = df_filtrado[df_filtrado['VALOR_ORIGINAL'] <= valor_max]
+
+    # Vencimento de
+    venc_inicio = st.session_state.get('det_venc_inicio')
+    if venc_inicio:
+        df_filtrado = df_filtrado[df_filtrado['VENCIMENTO'].dt.date >= venc_inicio]
+
+    # Vencimento ate
+    venc_fim = st.session_state.get('det_venc_fim')
+    if venc_fim:
+        df_filtrado = df_filtrado[df_filtrado['VENCIMENTO'].dt.date <= venc_fim]
 
     return df_filtrado.sort_values('VENCIMENTO', ascending=True)
 
 
-def _render_tabela(df_filtrado):
-    """Renderiza tabela de títulos"""
+def _render_tabela_titulos(df_filtrado, cores, hoje):
+    """Tabela completa de titulos"""
 
     if len(df_filtrado) == 0:
-        st.info("Nenhum título encontrado.")
+        st.info("Nenhum titulo encontrado com os filtros selecionados.")
         return
 
-    # Preparar dados
-    df_show = df_filtrado[[
-        'NOME_FILIAL', 'NOME_FORNECEDOR', 'DESCRICAO',
-        'EMISSAO', 'VENCIMENTO', 'VALOR_ORIGINAL', 'SALDO', 'STATUS', 'DIAS_ATRASO'
-    ]].copy()
+    # Controles
+    col1, col2, col3 = st.columns([2, 1, 1])
 
-    df_show['EMISSAO'] = pd.to_datetime(df_show['EMISSAO'], errors='coerce').dt.strftime('%d/%m/%Y')
-    df_show['VENCIMENTO'] = pd.to_datetime(df_show['VENCIMENTO'], errors='coerce').dt.strftime('%d/%m/%Y')
+    with col1:
+        ordem = st.radio(
+            "Ordenar por:",
+            ["Vencimento", "Emissao", "Maior Valor", "Menor Valor", "Fornecedor", "Maior Atraso"],
+            horizontal=True,
+            key="det_ordem"
+        )
+
+    with col2:
+        limite = st.selectbox("Exibir", ["100", "500", "1000", "Todos"], key="det_limite")
+
+    with col3:
+        colunas_extra = st.checkbox("Mais colunas", value=False, key="det_mais_cols")
+
+    # Aplicar ordenacao
+    ordem_map = {
+        "Vencimento": ("VENCIMENTO", True),
+        "Emissao": ("EMISSAO", False),
+        "Maior Valor": ("VALOR_ORIGINAL", False),
+        "Menor Valor": ("VALOR_ORIGINAL", True),
+        "Fornecedor": ("NOME_FORNECEDOR", True),
+        "Maior Atraso": ("DIAS_ATRASO", False)
+    }
+    col_ordem, asc = ordem_map[ordem]
+    df_ord = df_filtrado.sort_values(col_ordem, ascending=asc, na_position='last')
+
+    # Aplicar limite
+    if limite != "Todos":
+        df_ord = df_ord.head(int(limite))
+
+    # Colunas a exibir
+    if colunas_extra:
+        colunas_exibir = [
+            'NOME_FILIAL', 'NOME_FORNECEDOR', 'DESCRICAO', 'TIPO',
+            'EMISSAO', 'VENCIMENTO', 'DT_BAIXA',
+            'VALOR_ORIGINAL', 'SALDO', 'STATUS',
+            'DIAS_ATRASO', 'DIAS_PARA_PAGAR', 'DIAS_ATRASO_PGTO',
+            'DESCRICAO_FORMA_PAGAMENTO'
+        ]
+    else:
+        colunas_exibir = [
+            'NOME_FILIAL', 'NOME_FORNECEDOR',
+            'EMISSAO', 'VENCIMENTO', 'DT_BAIXA',
+            'VALOR_ORIGINAL', 'SALDO', 'STATUS', 'DIAS_ATRASO'
+        ]
+
+    colunas_disponiveis = [c for c in colunas_exibir if c in df_ord.columns]
+    df_show = df_ord[colunas_disponiveis].copy()
+
+    # Formatar datas
+    for col in ['EMISSAO', 'VENCIMENTO', 'DT_BAIXA']:
+        if col in df_show.columns:
+            df_show[col] = pd.to_datetime(df_show[col], errors='coerce').dt.strftime('%d/%m/%Y')
+            df_show[col] = df_show[col].fillna('-')
+
+    # Formatar valores
     df_show['VALOR_ORIGINAL'] = df_show['VALOR_ORIGINAL'].apply(lambda x: formatar_moeda(x, completo=True))
     df_show['SALDO'] = df_show['SALDO'].apply(lambda x: formatar_moeda(x, completo=True))
 
-    def format_status(s):
-        status_map = {
-            'Vencido': '🔴 Vencido',
-            'Vence em 7 dias': '🟠 7 dias',
-            'Vence em 15 dias': '🟡 15 dias',
-            'Vence em 30 dias': '🟢 30 dias',
-            'Vence em 60 dias': '🔵 60 dias',
-            'Vence em +60 dias': '📅 +60 dias',
-            'Pago': '✅ Pago'
-        }
-        return status_map.get(s, s)
+    # Formatar dias
+    def fmt_dias(d):
+        if pd.isna(d) or d == 0:
+            return '-'
+        return f"{int(d)}d"
 
-    df_show['STATUS'] = df_show['STATUS'].apply(format_status)
+    def fmt_atraso_pgto(d):
+        if pd.isna(d):
+            return '-'
+        d = int(d)
+        if d < 0:
+            return f"{abs(d)}d antecip."
+        elif d == 0:
+            return "No prazo"
+        else:
+            return f"{d}d atraso"
 
-    df_show.columns = ['Filial', 'Fornecedor', 'Categoria', 'Emissão', 'Vencimento',
-                       'Valor', 'Saldo', 'Status', 'Atraso']
+    if 'DIAS_ATRASO' in df_show.columns:
+        df_show['DIAS_ATRASO'] = df_show['DIAS_ATRASO'].apply(fmt_dias)
 
-    st.dataframe(
-        df_show,
-        use_container_width=True,
-        hide_index=True,
-        height=450
-    )
+    if 'DIAS_PARA_PAGAR' in df_show.columns:
+        df_show['DIAS_PARA_PAGAR'] = df_show['DIAS_PARA_PAGAR'].apply(fmt_dias)
 
-    st.caption(f"Total: {len(df_show)} títulos")
+    if 'DIAS_ATRASO_PGTO' in df_show.columns:
+        df_show['DIAS_ATRASO_PGTO'] = df_show['DIAS_ATRASO_PGTO'].apply(fmt_atraso_pgto)
+
+    # Renomear colunas
+    nomes = {
+        'NOME_FILIAL': 'Filial',
+        'NOME_FORNECEDOR': 'Fornecedor',
+        'DESCRICAO': 'Categoria',
+        'TIPO': 'Tipo',
+        'EMISSAO': 'Emissao',
+        'VENCIMENTO': 'Vencimento',
+        'DT_BAIXA': 'Dt Pagto',
+        'VALOR_ORIGINAL': 'Valor',
+        'SALDO': 'Saldo',
+        'STATUS': 'Status',
+        'DIAS_ATRASO': 'Atraso',
+        'DIAS_PARA_PAGAR': 'Dias p/ Pagar',
+        'DIAS_ATRASO_PGTO': 'Pgto vs Venc',
+        'DESCRICAO_FORMA_PAGAMENTO': 'Forma Pgto'
+    }
+    df_show.columns = [nomes.get(c, c) for c in df_show.columns]
+
+    # Truncar nome fornecedor
+    if 'Fornecedor' in df_show.columns:
+        df_show['Fornecedor'] = df_show['Fornecedor'].astype(str).str[:30]
+
+    st.dataframe(df_show, use_container_width=True, hide_index=True, height=500)
+    st.caption(f"Exibindo {len(df_show)} de {len(df_filtrado)} titulos")
 
 
-def _render_graficos(df_filtrado, cores):
-    """Renderiza gráficos"""
+def _render_por_fornecedor(df_filtrado, cores):
+    """Agrupamento por fornecedor"""
 
     if len(df_filtrado) == 0:
-        st.info("Nenhum dado para visualizar.")
+        st.info("Nenhum titulo encontrado.")
         return
 
-    # Linha 1: Status e Fornecedores
-    col1, col2 = st.columns(2)
+    st.markdown("##### Resumo por Fornecedor")
 
+    # Agrupar
+    df_grp = df_filtrado.groupby('NOME_FORNECEDOR').agg({
+        'VALOR_ORIGINAL': ['count', 'sum'],
+        'SALDO': 'sum',
+        'DIAS_ATRASO': 'mean'
+    }).reset_index()
+    df_grp.columns = ['Fornecedor', 'Qtd', 'Total', 'Saldo', 'Atraso Medio']
+
+    # Ordenacao
+    col1, col2 = st.columns([3, 1])
     with col1:
-        st.markdown("##### Por Status")
-
-        df_status = df_filtrado.groupby('STATUS')['SALDO'].sum().reset_index()
-        df_status = df_status.sort_values('SALDO', ascending=False)
-
-        cores_status = {
-            'Vencido': cores['perigo'],
-            'Vence em 7 dias': '#ff6b35',
-            'Vence em 15 dias': cores['alerta'],
-            'Vence em 30 dias': '#a3e635',
-            'Vence em 60 dias': cores['info'],
-            'Vence em +60 dias': cores['primaria'],
-            'Pago': cores['sucesso']
-        }
-
-        fig = go.Figure(data=[go.Pie(
-            labels=df_status['STATUS'],
-            values=df_status['SALDO'],
-            hole=0.5,
-            marker_colors=[cores_status.get(s, cores['info']) for s in df_status['STATUS']],
-            textinfo='percent',
-            textfont_size=11
-        )])
-
-        fig.update_layout(
-            criar_layout(280),
-            showlegend=True,
-            legend=dict(orientation='h', yanchor='bottom', y=-0.2, xanchor='center', x=0.5, font=dict(size=9)),
-            margin=dict(l=10, r=10, t=10, b=60)
+        ordem = st.radio(
+            "Ordenar por:",
+            ["Maior Total", "Maior Saldo", "Mais Titulos", "Maior Atraso"],
+            horizontal=True,
+            key="det_forn_ordem"
         )
-        st.plotly_chart(fig, use_container_width=True)
-
     with col2:
-        st.markdown("##### Top 10 Fornecedores")
+        limite = st.selectbox("Exibir", ["50", "100", "Todos"], key="det_forn_limite")
 
-        df_forn = df_filtrado.groupby('NOME_FORNECEDOR')['SALDO'].sum().nlargest(10).reset_index()
+    # Aplicar ordenacao
+    ordem_map = {
+        "Maior Total": ("Total", False),
+        "Maior Saldo": ("Saldo", False),
+        "Mais Titulos": ("Qtd", False),
+        "Maior Atraso": ("Atraso Medio", False)
+    }
+    col_ord, asc = ordem_map[ordem]
+    df_grp = df_grp.sort_values(col_ord, ascending=asc, na_position='last')
 
-        fig = go.Figure()
-        fig.add_trace(go.Bar(
-            y=df_forn['NOME_FORNECEDOR'].str[:18],
-            x=df_forn['SALDO'],
-            orientation='h',
-            marker_color=cores['primaria'],
-            text=[formatar_moeda(v) for v in df_forn['SALDO']],
-            textposition='outside',
-            textfont=dict(size=9)
-        ))
+    if limite != "Todos":
+        df_grp = df_grp.head(int(limite))
 
-        fig.update_layout(
-            criar_layout(280),
-            yaxis={'autorange': 'reversed'},
-            margin=dict(l=10, r=60, t=10, b=10)
-        )
-        st.plotly_chart(fig, use_container_width=True)
+    # Formatar
+    df_show = df_grp.copy()
+    df_show['Total'] = df_show['Total'].apply(lambda x: formatar_moeda(x, completo=True))
+    df_show['Saldo'] = df_show['Saldo'].apply(lambda x: formatar_moeda(x, completo=True))
+    df_show['Atraso Medio'] = df_show['Atraso Medio'].apply(lambda x: f"{x:.0f}d" if pd.notna(x) and x > 0 else '-')
+    df_show['Fornecedor'] = df_show['Fornecedor'].str[:40]
 
-    # Linha 2: Filial e Categoria
-    col1, col2 = st.columns(2)
-
-    with col1:
-        st.markdown("##### Por Filial")
-
-        df_filial = df_filtrado.groupby('NOME_FILIAL')['SALDO'].sum().reset_index()
-        df_filial = df_filial.sort_values('SALDO', ascending=False)
-
-        fig = go.Figure()
-        fig.add_trace(go.Bar(
-            x=df_filial['NOME_FILIAL'],
-            y=df_filial['SALDO'],
-            marker_color=cores['alerta'],
-            text=[formatar_moeda(v) for v in df_filial['SALDO']],
-            textposition='outside',
-            textfont=dict(size=9)
-        ))
-
-        fig.update_layout(
-            criar_layout(250),
-            xaxis_tickangle=-45,
-            margin=dict(l=10, r=10, t=10, b=70)
-        )
-        st.plotly_chart(fig, use_container_width=True)
-
-    with col2:
-        st.markdown("##### Top 10 Categorias")
-
-        df_cat = df_filtrado.groupby('DESCRICAO')['SALDO'].sum().nlargest(10).reset_index()
-
-        fig = go.Figure()
-        fig.add_trace(go.Bar(
-            y=df_cat['DESCRICAO'].str[:20],
-            x=df_cat['SALDO'],
-            orientation='h',
-            marker_color=cores['info'],
-            text=[formatar_moeda(v) for v in df_cat['SALDO']],
-            textposition='outside',
-            textfont=dict(size=9)
-        ))
-
-        fig.update_layout(
-            criar_layout(250),
-            yaxis={'autorange': 'reversed'},
-            margin=dict(l=10, r=60, t=10, b=10)
-        )
-        st.plotly_chart(fig, use_container_width=True)
+    st.dataframe(df_show, use_container_width=True, hide_index=True, height=450)
+    st.caption(f"Total: {len(df_grp)} fornecedores")
 
 
-def _render_indicadores(df, cores):
-    """Renderiza indicadores"""
+def _render_exportar(df_filtrado, hoje):
+    """Opcoes de exportacao"""
 
-    # Calcular indicadores
-    df_pagos = df[df['SALDO'] == 0].copy()
+    st.markdown("##### Exportar Dados")
 
-    # DPO
-    dpo = 0
-    taxa_pontual = 0
-    if len(df_pagos) > 0 and 'DT_BAIXA' in df_pagos.columns:
-        df_pagos['DT_BAIXA'] = pd.to_datetime(df_pagos['DT_BAIXA'], errors='coerce')
-        df_pagos['DIAS_PGTO'] = (df_pagos['DT_BAIXA'] - df_pagos['EMISSAO']).dt.days
-        df_pagos_valid = df_pagos[df_pagos['DIAS_PGTO'] > 0]
-        if len(df_pagos_valid) > 0:
-            dpo = df_pagos_valid['DIAS_PGTO'].mean()
-            df_pagos_valid['PONTUAL'] = df_pagos_valid['DT_BAIXA'] <= df_pagos_valid['VENCIMENTO']
-            taxa_pontual = df_pagos_valid['PONTUAL'].sum() / len(df_pagos_valid) * 100
+    if len(df_filtrado) == 0:
+        st.info("Nenhum dado para exportar.")
+        return
 
-    # Outros indicadores
-    total_geral = df['VALOR_ORIGINAL'].sum()
-    top10_valor = df.groupby('NOME_FORNECEDOR')['VALOR_ORIGINAL'].sum().nlargest(10).sum()
-    concentracao = (top10_valor / total_geral * 100) if total_geral > 0 else 0
+    # Resumo dos dados
+    col1, col2, col3, col4 = st.columns(4)
 
-    ticket_medio = df['VALOR_ORIGINAL'].mean() if len(df) > 0 else 0
-
-    df_vencidos = df[df['STATUS'] == 'Vencido']
-    aging_medio = df_vencidos['DIAS_ATRASO'].mean() if len(df_vencidos) > 0 else 0
-
-    total_saldo = df['SALDO'].sum()
-    total_vencido = df_vencidos['SALDO'].sum()
-    taxa_inadimplencia = (total_vencido / total_saldo * 100) if total_saldo > 0 else 0
-
-    # Layout em 2 linhas
-    col1, col2, col3 = st.columns(3)
-
-    with col1:
-        st.metric("DPO Médio", f"{dpo:.0f} dias", help="Prazo médio de pagamento")
-        st.metric("Ticket Médio", formatar_moeda(ticket_medio))
-
-    with col2:
-        st.metric("Taxa Pontualidade", f"{taxa_pontual:.1f}%", help="% pagos no prazo")
-        st.metric("Concentração Top 10", f"{concentracao:.1f}%")
-
-    with col3:
-        st.metric("Aging Médio", f"{aging_medio:.0f} dias", help="Atraso médio dos vencidos")
-        st.metric(
-            "Taxa Inadimplência",
-            f"{taxa_inadimplencia:.1f}%",
-            delta="Alto" if taxa_inadimplencia > 20 else "Normal",
-            delta_color="inverse" if taxa_inadimplencia > 20 else "off"
-        )
+    col1.metric("Titulos", formatar_numero(len(df_filtrado)))
+    col2.metric("Valor Total", formatar_moeda(df_filtrado['VALOR_ORIGINAL'].sum()))
+    col3.metric("Saldo", formatar_moeda(df_filtrado['SALDO'].sum()))
+    col4.metric("Fornecedores", formatar_numero(df_filtrado['NOME_FORNECEDOR'].nunique()))
 
     st.markdown("---")
 
-    # Gráficos
-    col1, col2 = st.columns(2)
+    # Opcoes de exportacao
+    col1, col2, col3 = st.columns(3)
 
     with col1:
-        st.markdown("##### Distribuição de Valores")
-
-        fig = go.Figure()
-        fig.add_trace(go.Histogram(
-            x=df['VALOR_ORIGINAL'],
-            nbinsx=25,
-            marker_color=cores['primaria'],
-            opacity=0.7
-        ))
-
-        fig.update_layout(
-            criar_layout(220),
-            xaxis_title='Valor (R$)',
-            yaxis_title='Frequência',
-            margin=dict(l=40, r=10, t=10, b=40)
+        st.markdown("###### Dados Filtrados")
+        st.caption(f"{len(df_filtrado)} titulos")
+        st.download_button(
+            label="Baixar Excel",
+            data=to_excel(df_filtrado),
+            file_name=f"titulos_{hoje.strftime('%Y%m%d_%H%M')}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True
         )
-        st.plotly_chart(fig, use_container_width=True)
 
     with col2:
-        st.markdown("##### Faixas de Valor")
+        st.markdown("###### Apenas Vencidos")
+        df_venc = df_filtrado[df_filtrado['STATUS'] == 'Vencido']
+        st.caption(f"{len(df_venc)} titulos")
+        if len(df_venc) > 0:
+            st.download_button(
+                label="Baixar Vencidos",
+                data=to_excel(df_venc),
+                file_name=f"vencidos_{hoje.strftime('%Y%m%d_%H%M')}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True
+            )
+        else:
+            st.info("Sem vencidos")
 
-        def classificar(v):
-            if v <= 1000: return '< 1K'
-            elif v <= 5000: return '1K-5K'
-            elif v <= 10000: return '5K-10K'
-            elif v <= 50000: return '10K-50K'
-            else: return '> 50K'
+    with col3:
+        st.markdown("###### Apenas Pendentes")
+        df_pend = df_filtrado[df_filtrado['SALDO'] > 0]
+        st.caption(f"{len(df_pend)} titulos")
+        if len(df_pend) > 0:
+            st.download_button(
+                label="Baixar Pendentes",
+                data=to_excel(df_pend),
+                file_name=f"pendentes_{hoje.strftime('%Y%m%d_%H%M')}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True
+            )
+        else:
+            st.info("Sem pendentes")
 
-        df_faixa = df.copy()
-        df_faixa['FAIXA'] = df_faixa['VALOR_ORIGINAL'].apply(classificar)
+    st.markdown("---")
 
-        ordem = ['< 1K', '1K-5K', '5K-10K', '10K-50K', '> 50K']
-        df_agg = df_faixa.groupby('FAIXA').size().reset_index(name='Qtd')
-        df_agg['Ordem'] = df_agg['FAIXA'].apply(lambda x: ordem.index(x) if x in ordem else 99)
-        df_agg = df_agg.sort_values('Ordem')
+    # Detalhes dos campos
+    with st.expander("Campos incluidos na exportacao"):
+        st.markdown("""
+        **Identificacao:** Filial, Fornecedor, Categoria, Tipo, Numero
 
-        fig = go.Figure()
-        fig.add_trace(go.Bar(
-            x=df_agg['FAIXA'],
-            y=df_agg['Qtd'],
-            marker_color=cores['alerta'],
-            text=df_agg['Qtd'],
-            textposition='outside'
-        ))
+        **Datas:** Emissao, Vencimento, Data Pagamento
 
-        fig.update_layout(
-            criar_layout(220),
-            yaxis_title='Quantidade',
-            margin=dict(l=40, r=10, t=10, b=30)
-        )
-        st.plotly_chart(fig, use_container_width=True)
+        **Valores:** Valor Original, Saldo, Juros, Multa, Desconto
+
+        **Status:** Status, Dias de Atraso, Dias para Pagar
+
+        **Pagamento:** Forma de Pagamento, Banco
+        """)
