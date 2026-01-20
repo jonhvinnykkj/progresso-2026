@@ -1,9 +1,6 @@
 """
 Aba Intercompany - Análise de operações entre empresas do grupo
-- Progresso Agrícola <-> Progresso Agroindustrial
-- Brasil Agricola LTDA
-- Família Sanders (PF): Cornelio, Greicy, Gregory, Gueberson
-- Fazendas do Grupo: Ouro Branco, Imperial
+Empresas: Progresso, Ouro Branco, Peninsula, Hotelaria (Tropical)
 """
 import streamlit as st
 import pandas as pd
@@ -11,7 +8,7 @@ import plotly.graph_objects as go
 from datetime import datetime
 
 from config.theme import get_cores
-from config.settings import INTERCOMPANY_PATTERNS, INTERCOMPANY_TIPOS
+from config.settings import INTERCOMPANY_PATTERNS, INTERCOMPANY_TIPOS, INTERCOMPANY_PADRONIZACAO
 from components.charts import criar_layout
 from utils.formatters import formatar_moeda, formatar_numero
 
@@ -22,8 +19,23 @@ def identificar_intercompany(df):
     return df[mask].copy()
 
 
+def padronizar_nome_ic(nome):
+    """Padroniza o nome para comparação"""
+    if pd.isna(nome):
+        return nome
+    nome_limpo = str(nome).strip().upper()
+    for variacao, padrao in INTERCOMPANY_PADRONIZACAO.items():
+        if variacao.upper() in nome_limpo:
+            return padrao
+    return nome
+
+
 def classificar_tipo_intercompany(nome):
     """Classifica o tipo de operação intercompany usando config centralizada"""
+    nome_padrao = padronizar_nome_ic(nome)
+    if nome_padrao in INTERCOMPANY_TIPOS:
+        return INTERCOMPANY_TIPOS[nome_padrao]
+    # Fallback para busca parcial
     nome_upper = str(nome).upper()
     for padrao, tipo in INTERCOMPANY_TIPOS.items():
         if padrao in nome_upper:
@@ -153,21 +165,18 @@ def render_intercompany(df_contas):
             total = row['Total']
             pct_pago = row['% Pago']
 
-            if 'Agroindustrial' in tipo:
+            if 'Progresso' in tipo:
                 icone = "🏭"
                 cor = cores['primaria']
-            elif 'Agricola' in tipo:
+            elif 'Ouro Branco' in tipo:
                 icone = "🌾"
                 cor = cores['sucesso']
-            elif 'Empresas do Grupo' in tipo:
-                icone = "🏢"
-                cor = cores['info']
-            elif 'Familia Sanders' in tipo:
-                icone = "👤"
-                cor = cores['alerta']
-            elif 'Fazendas' in tipo:
+            elif 'Peninsula' in tipo:
                 icone = "🌿"
                 cor = '#84cc16'
+            elif 'Hotelaria' in tipo:
+                icone = "🏨"
+                cor = cores['info']
             else:
                 icone = "📋"
                 cor = cores['texto_secundario']
@@ -229,16 +238,14 @@ def _render_por_empresa(df_ic, cores):
         df_top = df_emp.head(10)
 
         def get_cor_tipo(t):
-            if 'Agroindustrial' in t:
+            if 'Progresso' in t:
                 return cores['primaria']
-            elif 'Agricola' in t:
+            elif 'Ouro Branco' in t:
                 return cores['sucesso']
-            elif 'Empresas do Grupo' in t:
-                return cores['info']
-            elif 'Familia Sanders' in t:
-                return cores['alerta']
-            elif 'Fazendas' in t:
+            elif 'Peninsula' in t:
                 return '#84cc16'
+            elif 'Hotelaria' in t:
+                return cores['info']
             return cores['texto_secundario']
 
         fig = go.Figure()
@@ -266,11 +273,10 @@ def _render_por_empresa(df_ic, cores):
         df_tipo = df_ic.groupby('TIPO_INTERCOMPANY')['VALOR_ORIGINAL'].sum().reset_index()
 
         cores_tipo = {
-            'Progresso Agroindustrial': cores['primaria'],
-            'Progresso Agricola': cores['sucesso'],
-            'Empresas do Grupo': cores['info'],
-            'Familia Sanders (PF)': cores['alerta'],
-            'Fazendas do Grupo': '#84cc16',
+            'Empresas Progresso': cores['primaria'],
+            'Ouro Branco': cores['sucesso'],
+            'Fazenda Peninsula': '#84cc16',
+            'Hotelaria': cores['info'],
             'Outros': cores['texto_secundario']
         }
 
@@ -338,11 +344,10 @@ def _render_evolucao_temporal(df_ic, cores):
     st.markdown("##### Evolução Mensal por Tipo")
 
     cores_tipo = {
-        'Progresso Agroindustrial': cores['primaria'],
-        'Progresso Agricola': cores['sucesso'],
-        'Empresas do Grupo': cores['info'],
-        'Familia Sanders (PF)': cores['alerta'],
-        'Fazendas do Grupo': '#84cc16',
+        'Empresas Progresso': cores['primaria'],
+        'Ouro Branco': cores['sucesso'],
+        'Fazenda Peninsula': '#84cc16',
+        'Hotelaria': cores['info'],
         'Outros': cores['texto_secundario']
     }
 

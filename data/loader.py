@@ -4,143 +4,117 @@ Carregamento e processamento de dados
 import pandas as pd
 import streamlit as st
 from datetime import datetime
-from sqlalchemy import create_engine
-from dotenv import load_dotenv
-import os
 
-from config.settings import CACHE_TTL
-
-# Carregar variáveis de ambiente
-load_dotenv()
-
-DATABASE_URL = os.getenv('DATABASE_URL')
+from config.settings import CACHE_TTL, INTERCOMPANY_PADRONIZACAO, INTERCOMPANY_PATTERNS
 
 
-def get_engine():
-    """Cria engine de conexão com o Neon"""
-    return create_engine(DATABASE_URL)
+def padronizar_nome_intercompany(nome):
+    """Padroniza nomes de empresas do grupo para comparação correta"""
+    if pd.isna(nome):
+        return nome
+
+    nome_limpo = str(nome).strip().upper()
+
+    # Busca no mapeamento de padronização
+    for variacao, padrao in INTERCOMPANY_PADRONIZACAO.items():
+        if variacao.upper() in nome_limpo:
+            return padrao
+
+    return nome  # Retorna original se não for intercompany
+
+
+def eh_intercompany(nome):
+    """Verifica se o nome é de uma empresa do grupo"""
+    if pd.isna(nome):
+        return False
+    nome_upper = str(nome).strip().upper()
+    return any(p.upper() in nome_upper for p in INTERCOMPANY_PATTERNS)
 
 
 def padronizar_forma_pagamento(serie):
     """Padroniza as formas de pagamento para evitar duplicatas"""
-    # Mapeamento de variações para forma padronizada
-    mapeamento = {
+    # Regras de mapeamento por padrão (ordem importa - mais específico primeiro)
+    regras = [
+        # PIX (antes de transferência para evitar conflito)
+        ('PIX', 'PIX'),
+
         # Boleto
-        'BOLETO': 'Boleto',
-        'BOLETO BANCARIO': 'Boleto',
-        'BOLETO BANCÁRIO': 'Boleto',
-        'BOL': 'Boleto',
-        'BOLETOS': 'Boleto',
+        ('BOLETO', 'Boleto'),
+        ('COBRANCA', 'Boleto'),
+        ('COBRANÇA', 'Boleto'),
 
-        # PIX
-        'PIX': 'PIX',
-        'TRANSFERENCIA PIX': 'PIX',
-        'TRANSFERÊNCIA PIX': 'PIX',
-        'TED/PIX': 'PIX',
+        # TED/Transferência
+        ('TED', 'TED'),
+        ('TRANSFER', 'TED'),  # Captura TRANSFERENCIA, TRANSFERÊNCIA, etc
+        ('CREDITO EM CONTA', 'TED'),
 
-        # Transferência/TED/DOC
-        'TRANSFERENCIA': 'Transferencia',
-        'TRANSFERÊNCIA': 'Transferencia',
-        'TRANSFERENCIA BANCARIA': 'Transferencia',
-        'TRANSFERÊNCIA BANCÁRIA': 'Transferencia',
-        'TED': 'Transferencia',
-        'DOC': 'Transferencia',
-        'TED/DOC': 'Transferencia',
+        # Compensação
+        ('COMPENSACAO', 'Compensacao'),
+        ('COMPENSAÇÃO', 'Compensacao'),
+        ('TITULO PARA COMPENSACAO', 'Compensacao'),
 
-        # Débito em Conta
-        'DEBITO EM CONTA': 'Debito em Conta',
-        'DÉBITO EM CONTA': 'Debito em Conta',
-        'DEBITO CONTA': 'Debito em Conta',
-        'DÉBITO CONTA': 'Debito em Conta',
-        'DEB. CONTA': 'Debito em Conta',
-        'DEBITO AUTOMATICO': 'Debito em Conta',
-        'DÉBITO AUTOMÁTICO': 'Debito em Conta',
-        'DEB. AUTOMATICO': 'Debito em Conta',
-
-        # Cartão de Crédito
-        'CARTAO DE CREDITO': 'Cartao Credito',
-        'CARTÃO DE CRÉDITO': 'Cartao Credito',
-        'CARTAO CREDITO': 'Cartao Credito',
-        'CARTÃO CRÉDITO': 'Cartao Credito',
-        'CART. CREDITO': 'Cartao Credito',
-        'CARTAO': 'Cartao Credito',
-        'CARTÃO': 'Cartao Credito',
-        'C. CREDITO': 'Cartao Credito',
-
-        # Cartão de Débito
-        'CARTAO DE DEBITO': 'Cartao Debito',
-        'CARTÃO DE DÉBITO': 'Cartao Debito',
-        'CARTAO DEBITO': 'Cartao Debito',
-        'CARTÃO DÉBITO': 'Cartao Debito',
-
-        # Dinheiro/Espécie
-        'DINHEIRO': 'Dinheiro',
-        'ESPECIE': 'Dinheiro',
-        'ESPÉCIE': 'Dinheiro',
-        'EM ESPECIE': 'Dinheiro',
-        'EM ESPÉCIE': 'Dinheiro',
+        # Dinheiro
+        ('DINHEIRO', 'Dinheiro'),
+        ('ESPECIE', 'Dinheiro'),
+        ('ESPÉCIE', 'Dinheiro'),
 
         # Cheque
-        'CHEQUE': 'Cheque',
-        'CHQ': 'Cheque',
-        'CHEQUES': 'Cheque',
-        'CHEQUE A VISTA': 'Cheque',
-        'CHEQUE À VISTA': 'Cheque',
-        'CHEQUE PRE': 'Cheque Pre-datado',
-        'CHEQUE PRÉ': 'Cheque Pre-datado',
-        'CHEQUE PRE-DATADO': 'Cheque Pre-datado',
-        'CHEQUE PRÉ-DATADO': 'Cheque Pre-datado',
+        ('CHEQUE', 'Cheque'),
 
-        # Compensação/Encontro de Contas
-        'COMPENSACAO': 'Compensacao',
-        'COMPENSAÇÃO': 'Compensacao',
-        'ENCONTRO DE CONTAS': 'Compensacao',
-        'ACERTO': 'Compensacao',
+        # Débito em Conta
+        ('DEBITO', 'Debito em Conta'),
+        ('DÉBITO', 'Debito em Conta'),
+
+        # Cartão
+        ('CARTAO', 'Cartao'),
+        ('CARTÃO', 'Cartao'),
 
         # Depósito
-        'DEPOSITO': 'Deposito',
-        'DEPÓSITO': 'Deposito',
-        'DEPOSITO BANCARIO': 'Deposito',
-        'DEPÓSITO BANCÁRIO': 'Deposito',
-        'DEP. BANCARIO': 'Deposito',
+        ('DEPOSITO', 'Deposito'),
+        ('DEPÓSITO', 'Deposito'),
 
-        # Duplicata/Cobrança
-        'DUPLICATA': 'Duplicata',
-        'COBRANCA': 'Cobranca',
-        'COBRANÇA': 'Cobranca',
-        'COBRANCA BANCARIA': 'Cobranca',
-        'COBRANÇA BANCÁRIA': 'Cobranca',
+        # Tributos
+        ('TRIBUTO', 'Tributos'),
+        ('DARF', 'Tributos'),
+        ('GPS', 'Tributos'),
+        ('FGTS', 'Tributos'),
 
-        # Outros
-        'A DEFINIR': 'A Definir',
-        'NAO INFORMADO': 'Nao Informado',
-        'NÃO INFORMADO': 'Nao Informado',
-        'OUTROS': 'Outros',
-        'OUTRO': 'Outros',
-    }
+        # Concessionárias
+        ('CONCESSIONARIA', 'Concessionarias'),
+        ('CONCESSIONÁRIA', 'Concessionarias'),
+
+        # Sem pagamento
+        ('SEM PAGAMENTO', 'Sem Pagamento'),
+    ]
 
     def mapear(valor):
         if pd.isna(valor) or str(valor).strip() == '':
-            return ''
+            return 'Nao Informado'
+
         valor_upper = str(valor).upper().strip()
-        # Tenta encontrar no mapeamento
-        if valor_upper in mapeamento:
-            return mapeamento[valor_upper]
-        # Se não encontrar, retorna o valor original com primeira letra maiúscula
-        return str(valor).strip().title()
+
+        # Corrigir encoding quebrado (caractere � = encoding issue)
+        valor_upper = valor_upper.replace('�', 'E')
+
+        # Buscar por padrão (contains)
+        for padrao, resultado in regras:
+            if padrao in valor_upper:
+                return resultado
+
+        # Se não encontrar, retorna "Outros"
+        return 'Outros'
 
     return serie.apply(mapear)
 
 
 @st.cache_data(ttl=CACHE_TTL)
 def carregar_dados():
-    """Carrega e processa os dados do banco Neon PostgreSQL"""
-    engine = get_engine()
+    """Carrega e processa os dados dos arquivos Excel"""
 
-    # Carregar dados do banco (colunas em lowercase)
-    df_contas = pd.read_sql("SELECT * FROM contas_pagar", engine)
-    df_adiant = pd.read_sql("SELECT * FROM adiantamentos", engine)
-    df_baixas = pd.read_sql("SELECT * FROM baixas_adiantamentos", engine)
+    # Carregar dados dos arquivos Excel
+    df_contas = pd.read_excel('Contas a Pagar.xlsx')
+    df_adiant = pd.read_excel('Adiantamentos a pagar.xlsx')
+    df_baixas = pd.read_excel('Baixas de adiantamentos a pagar.xlsx')
 
     # Converter nomes de colunas para uppercase (compatibilidade)
     df_contas.columns = [c.upper() for c in df_contas.columns]
@@ -160,13 +134,16 @@ def carregar_dados():
     df_contas['MES'] = df_contas['EMISSAO'].dt.month
     df_contas['TRIMESTRE'] = df_contas['EMISSAO'].dt.quarter
 
-    # Calcular dias até vencimento
-    df_contas['DIAS_VENC'] = (df_contas['VENCIMENTO'] - hoje).dt.days
+    # Usar VENCTO_REAL como data de vencimento (fallback para VENCIMENTO se não existir)
+    df_contas['DATA_VENC'] = df_contas['VENCTO_REAL'].fillna(df_contas['VENCIMENTO'])
+
+    # Calcular dias até vencimento (usando VENCTO_REAL)
+    df_contas['DIAS_VENC'] = (df_contas['DATA_VENC'] - hoje).dt.days
 
     # Classificar status usando vetorização
     df_contas['STATUS'] = 'Vence em +60 dias'
     df_contas.loc[df_contas['SALDO'] <= 0, 'STATUS'] = 'Pago'
-    df_contas.loc[df_contas['VENCIMENTO'].isna() & (df_contas['SALDO'] > 0), 'STATUS'] = 'Sem data'
+    df_contas.loc[df_contas['DATA_VENC'].isna() & (df_contas['SALDO'] > 0), 'STATUS'] = 'Sem data'
     df_contas.loc[(df_contas['DIAS_VENC'] < 0) & (df_contas['SALDO'] > 0), 'STATUS'] = 'Vencido'
     df_contas.loc[(df_contas['DIAS_VENC'] >= 0) & (df_contas['DIAS_VENC'] <= 7) & (df_contas['SALDO'] > 0), 'STATUS'] = 'Vence em 7 dias'
     df_contas.loc[(df_contas['DIAS_VENC'] > 7) & (df_contas['DIAS_VENC'] <= 15) & (df_contas['SALDO'] > 0), 'STATUS'] = 'Vence em 15 dias'
@@ -182,7 +159,7 @@ def carregar_dados():
     if 'DT_BAIXA' in df_contas.columns:
         df_contas['DIAS_PARA_PAGAR'] = (df_contas['DT_BAIXA'] - df_contas['EMISSAO']).dt.days
         # Se pagou antes do vencimento = negativo (antecipado), se pagou depois = positivo (atrasado)
-        df_contas['DIAS_ATRASO_PGTO'] = (df_contas['DT_BAIXA'] - df_contas['VENCIMENTO']).dt.days
+        df_contas['DIAS_ATRASO_PGTO'] = (df_contas['DT_BAIXA'] - df_contas['DATA_VENC']).dt.days
     else:
         df_contas['DIAS_PARA_PAGAR'] = None
         df_contas['DIAS_ATRASO_PGTO'] = None
@@ -195,6 +172,19 @@ def carregar_dados():
     # Padronizar formas de pagamento
     if 'DESCRICAO_FORMA_PAGAMENTO' in df_contas.columns:
         df_contas['DESCRICAO_FORMA_PAGAMENTO'] = padronizar_forma_pagamento(df_contas['DESCRICAO_FORMA_PAGAMENTO'])
+
+    # Padronizar nomes de fornecedores intercompany
+    if 'NOME_FORNECEDOR' in df_contas.columns:
+        df_contas['FORNECEDOR_IC_PADRAO'] = df_contas['NOME_FORNECEDOR'].apply(padronizar_nome_intercompany)
+        df_contas['IS_INTERCOMPANY'] = df_contas['NOME_FORNECEDOR'].apply(eh_intercompany)
+
+    # Identificar adiantamentos (ADTO FORNECEDOR, ADTO SALARIOS, etc.)
+    if 'DESCRICAO' in df_contas.columns:
+        df_contas['IS_ADIANTAMENTO'] = df_contas['DESCRICAO'].str.upper().str.contains(
+            'ADTO|ADIANT', na=False, regex=True
+        )
+    else:
+        df_contas['IS_ADIANTAMENTO'] = False
 
     # Alerta NF entrada < 48h do vencimento
     if 'DIF_HORAS_DATAS' in df_contas.columns:
@@ -226,7 +216,12 @@ def aplicar_filtros(df_contas, data_inicio, data_fim, filtro_filial, filtro_stat
 
     # Aplicar filtros adicionais
     if filtro_filial != 'Todas as Filiais':
-        mask &= (df_contas['NOME_FILIAL'] == filtro_filial)
+        # Extrair código da filial do formato "COD - NOME"
+        if ' - ' in filtro_filial:
+            cod_filial = int(filtro_filial.split(' - ')[0])
+            mask &= (df_contas['FILIAL'] == cod_filial)
+        else:
+            mask &= (df_contas['NOME_FILIAL'] == filtro_filial)
 
     if filtro_status != 'Todos os Status':
         if filtro_status == 'Pago':
@@ -260,9 +255,15 @@ def aplicar_filtros(df_contas, data_inicio, data_fim, filtro_filial, filtro_stat
 @st.cache_data
 def get_opcoes_filtros(_df_contas):
     """Pré-calcula as opções de filtros"""
-    filiais = ['Todas as Filiais'] + sorted(_df_contas['NOME_FILIAL'].dropna().unique().tolist())
+    # Criar opções de filial com código + nome
+    filiais_df = _df_contas[['FILIAL', 'NOME_FILIAL']].drop_duplicates().dropna()
+    filiais_df = filiais_df.sort_values('FILIAL')
+    filiais_opcoes = ['Todas as Filiais'] + [
+        f"{row['FILIAL']} - {row['NOME_FILIAL']}"
+        for _, row in filiais_df.iterrows()
+    ]
     categorias = ['Todas as Categorias'] + sorted(_df_contas['DESCRICAO'].dropna().unique().tolist())
-    return filiais, categorias
+    return filiais_opcoes, categorias
 
 
 def get_dados_filtrados(df, df_contas):

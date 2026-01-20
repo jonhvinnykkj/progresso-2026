@@ -1,6 +1,6 @@
 """
-Aba Dashboard - Overview Executivo Resumido
-Foco: KPIs principais + graficos de status, evolucao e top fornecedores
+Aba Dashboard - Overview Executivo
+Foco: KPIs principais + Filiais + Categorias + Fluxo de Caixa + Vencimentos
 """
 import streamlit as st
 import plotly.graph_objects as go
@@ -13,7 +13,7 @@ from utils.formatters import formatar_moeda, formatar_numero
 
 
 def render_visao_geral(df, df_pendentes=None, df_vencidos=None, metricas=None):
-    """Renderiza a aba Dashboard - Overview executivo resumido"""
+    """Renderiza a aba Dashboard - Overview executivo"""
     cores = get_cores()
     hoje = datetime.now()
 
@@ -21,7 +21,7 @@ def render_visao_geral(df, df_pendentes=None, df_vencidos=None, metricas=None):
         st.warning("Nenhum dado disponivel.")
         return
 
-    # Se nao recebeu os dados, calcular internamente (compatibilidade)
+    # Se nao recebeu os dados, calcular internamente
     if df_pendentes is None:
         df_pendentes = df[df['SALDO'] > 0]
     if df_vencidos is None:
@@ -61,7 +61,7 @@ def render_visao_geral(df, df_pendentes=None, df_vencidos=None, metricas=None):
         </div>
         <div style="background: linear-gradient(135deg, {cores['alerta']}20 0%, {cores['alerta']}10 100%);
                     border: 1px solid {cores['alerta']}40; border-radius: 12px; padding: 1.25rem;">
-            <p style="color: {cores['texto_secundario']}; font-size: 0.8rem; margin: 0 0 0.5rem 0;">Pendente</p>
+            <p style="color: {cores['texto_secundario']}; font-size: 0.8rem; margin: 0 0 0.5rem 0;">Saldo a Pagar</p>
             <p style="color: {cores['alerta']}; font-size: 1.5rem; font-weight: 700; margin: 0;">{formatar_moeda(metricas['pendente'])}</p>
             <p style="color: {cores['texto_secundario']}; font-size: 0.75rem; margin: 0.25rem 0 0 0;">{100 - metricas['pct_pago']:.1f}% do total</p>
         </div>
@@ -69,296 +69,381 @@ def render_visao_geral(df, df_pendentes=None, df_vencidos=None, metricas=None):
                     border: 1px solid {cores['perigo']}40; border-radius: 12px; padding: 1.25rem;">
             <p style="color: {cores['texto_secundario']}; font-size: 0.8rem; margin: 0 0 0.5rem 0;">Vencido</p>
             <p style="color: {cores['perigo']}; font-size: 1.5rem; font-weight: 700; margin: 0;">{formatar_moeda(metricas['vencido'])}</p>
-            <p style="color: {cores['texto_secundario']}; font-size: 0.75rem; margin: 0.25rem 0 0 0;">{pct_vencido:.1f}% do pendente</p>
+            <p style="color: {cores['texto_secundario']}; font-size: 0.75rem; margin: 0.25rem 0 0 0;">{pct_vencido:.1f}% do saldo</p>
         </div>
     </div>
     """, unsafe_allow_html=True)
 
-    # ========== BARRA DE PROGRESSO ==========
-    st.markdown(f"""
-    <div style="background: {cores['card']}; border: 1px solid {cores['borda']}; border-radius: 12px; padding: 1rem; margin-bottom: 1.5rem;">
-        <div style="display: flex; justify-content: space-between; margin-bottom: 0.5rem;">
-            <span style="color: {cores['texto']}; font-weight: 600;">Taxa de Pagamento</span>
-            <span style="color: {cores['sucesso']}; font-weight: 700;">{metricas['pct_pago']:.1f}%</span>
-        </div>
-        <div style="background: {cores['borda']}; border-radius: 8px; height: 12px; overflow: hidden;">
-            <div style="background: linear-gradient(90deg, {cores['sucesso']} 0%, {cores['primaria']} 100%);
-                        width: {min(metricas['pct_pago'], 100):.1f}%; height: 100%; border-radius: 8px;"></div>
-        </div>
-        <div style="display: flex; justify-content: space-between; margin-top: 0.5rem;">
-            <span style="color: {cores['texto_secundario']}; font-size: 0.75rem;">Pago: {formatar_moeda(metricas['pago'])}</span>
-            <span style="color: {cores['texto_secundario']}; font-size: 0.75rem;">Meta: {formatar_moeda(metricas['total'])}</span>
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
-
-    # ========== CARDS DE AGING ==========
-    valor_vence_7d = df_pendentes[df_pendentes['STATUS'] == 'Vence em 7 dias']['SALDO'].sum() if len(df_pendentes) > 0 else 0
-    qtd_vence_7d = len(df_pendentes[df_pendentes['STATUS'] == 'Vence em 7 dias']) if len(df_pendentes) > 0 else 0
-
-    valor_vence_15d = df_pendentes[df_pendentes['STATUS'] == 'Vence em 15 dias']['SALDO'].sum() if len(df_pendentes) > 0 else 0
-    qtd_vence_15d = len(df_pendentes[df_pendentes['STATUS'] == 'Vence em 15 dias']) if len(df_pendentes) > 0 else 0
-
-    valor_vence_30d = df_pendentes[df_pendentes['STATUS'] == 'Vence em 30 dias']['SALDO'].sum() if len(df_pendentes) > 0 else 0
-    qtd_vence_30d = len(df_pendentes[df_pendentes['STATUS'] == 'Vence em 30 dias']) if len(df_pendentes) > 0 else 0
-
-    st.markdown(f"""
-    <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 0.75rem; margin-bottom: 1.5rem;">
-        <div style="background: {cores['card']}; border-left: 4px solid {cores['perigo']};
-                    border-radius: 0 10px 10px 0; padding: 1rem;">
-            <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.5rem;">
-                <div style="width: 10px; height: 10px; background: {cores['perigo']}; border-radius: 50%;"></div>
-                <span style="color: {cores['texto_secundario']}; font-size: 0.75rem; text-transform: uppercase; font-weight: 600;">Vencido</span>
-            </div>
-            <p style="color: {cores['perigo']}; font-size: 1.3rem; font-weight: 700; margin: 0;">{formatar_moeda(metricas['vencido'])}</p>
-            <p style="color: {cores['texto_secundario']}; font-size: 0.7rem; margin: 0.25rem 0 0 0;">{formatar_numero(metricas['qtd_vencidos'])} titulos | {metricas['dias_atraso']:.0f}d medio</p>
-        </div>
-        <div style="background: {cores['card']}; border-left: 4px solid {cores['alerta']};
-                    border-radius: 0 10px 10px 0; padding: 1rem;">
-            <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.5rem;">
-                <div style="width: 10px; height: 10px; background: {cores['alerta']}; border-radius: 50%;"></div>
-                <span style="color: {cores['texto_secundario']}; font-size: 0.75rem; text-transform: uppercase; font-weight: 600;">7 dias</span>
-            </div>
-            <p style="color: {cores['alerta']}; font-size: 1.3rem; font-weight: 700; margin: 0;">{formatar_moeda(valor_vence_7d)}</p>
-            <p style="color: {cores['texto_secundario']}; font-size: 0.7rem; margin: 0.25rem 0 0 0;">{formatar_numero(qtd_vence_7d)} titulos</p>
-        </div>
-        <div style="background: {cores['card']}; border-left: 4px solid {cores['info']};
-                    border-radius: 0 10px 10px 0; padding: 1rem;">
-            <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.5rem;">
-                <div style="width: 10px; height: 10px; background: {cores['info']}; border-radius: 50%;"></div>
-                <span style="color: {cores['texto_secundario']}; font-size: 0.75rem; text-transform: uppercase; font-weight: 600;">15 dias</span>
-            </div>
-            <p style="color: {cores['info']}; font-size: 1.3rem; font-weight: 700; margin: 0;">{formatar_moeda(valor_vence_15d)}</p>
-            <p style="color: {cores['texto_secundario']}; font-size: 0.7rem; margin: 0.25rem 0 0 0;">{formatar_numero(qtd_vence_15d)} titulos</p>
-        </div>
-        <div style="background: {cores['card']}; border-left: 4px solid {cores['sucesso']};
-                    border-radius: 0 10px 10px 0; padding: 1rem;">
-            <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.5rem;">
-                <div style="width: 10px; height: 10px; background: {cores['sucesso']}; border-radius: 50%;"></div>
-                <span style="color: {cores['texto_secundario']}; font-size: 0.75rem; text-transform: uppercase; font-weight: 600;">30 dias</span>
-            </div>
-            <p style="color: {cores['sucesso']}; font-size: 1.3rem; font-weight: 700; margin: 0;">{formatar_moeda(valor_vence_30d)}</p>
-            <p style="color: {cores['texto_secundario']}; font-size: 0.7rem; margin: 0.25rem 0 0 0;">{formatar_numero(qtd_vence_30d)} titulos</p>
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
+    # ========== ALERTAS - VENCIMENTOS HOJE E SEMANA ==========
+    _render_alertas_vencimentos(df_pendentes, df_vencidos, cores, hoje)
 
     st.divider()
 
-    # ========== GRAFICOS ==========
-    # Linha 1: Graficos principais
+    # ========== LINHA 1: Por Filial + Top Categorias ==========
     col1, col2 = st.columns(2)
 
     with col1:
-        _render_donut_status(df, cores)
+        _render_por_filial(df_pendentes, cores)
 
     with col2:
-        _render_evolucao_ultimos_meses(df, cores)
+        _render_top_categorias(df_pendentes, cores)
 
-    # Linha 2: Proximos vencimentos + Top fornecedores
+    st.divider()
+
+    # ========== LINHA 2: Fluxo de Caixa + Top Fornecedores ==========
     col1, col2 = st.columns(2)
 
     with col1:
-        _render_proximos_vencimentos(df_pendentes, cores, hoje)
+        _render_fluxo_caixa(df_pendentes, cores, hoje)
 
     with col2:
         _render_top_fornecedores(df_pendentes, cores)
 
+    st.divider()
 
-def _render_donut_status(df, cores):
-    """Donut chart de distribuicao por status de pagamento"""
-
-    st.markdown("##### Distribuicao por Status")
-
-    # Agrupar por status simplificado
-    df_status = df.copy()
-    df_status['STATUS_SIMPLES'] = df_status.apply(
-        lambda r: 'Pago' if r['SALDO'] <= 0 else ('Vencido' if r['STATUS'] == 'Vencido' else 'Pendente'),
-        axis=1
-    )
-
-    df_grp = df_status.groupby('STATUS_SIMPLES')['VALOR_ORIGINAL'].sum().reset_index()
-
-    cores_status = {
-        'Pago': cores['sucesso'],
-        'Pendente': cores['alerta'],
-        'Vencido': cores['perigo']
-    }
-
-    fig = go.Figure(go.Pie(
-        labels=df_grp['STATUS_SIMPLES'],
-        values=df_grp['VALOR_ORIGINAL'],
-        hole=0.65,
-        marker=dict(colors=[cores_status.get(s, cores['info']) for s in df_grp['STATUS_SIMPLES']]),
-        textinfo='percent',
-        textfont=dict(size=12, color='white'),
-        hovertemplate='<b>%{label}</b><br>R$ %{value:,.2f}<br>%{percent}<extra></extra>'
-    ))
-
-    # Texto central
-    total = df['VALOR_ORIGINAL'].sum()
-    fig.add_annotation(
-        text=f"<b>{formatar_moeda(total)}</b>",
-        x=0.5, y=0.5,
-        font=dict(size=16, color=cores['texto']),
-        showarrow=False
-    )
-
-    fig.update_layout(
-        criar_layout(300),
-        showlegend=True,
-        legend=dict(orientation="h", yanchor="bottom", y=-0.15, xanchor="center", x=0.5),
-        margin=dict(l=20, r=20, t=20, b=40)
-    )
-
-    st.plotly_chart(fig, use_container_width=True)
+    # ========== LINHA 3: Tabela Detalhada por Filial ==========
+    _render_tabela_filiais(df, df_pendentes, df_vencidos, cores)
 
 
-def _render_evolucao_ultimos_meses(df, cores):
-    """Evolucao dos ultimos 6 meses"""
+def _render_alertas_vencimentos(df_pendentes, df_vencidos, cores, hoje):
+    """Alertas de vencimentos - hoje, amanha, semana"""
 
-    st.markdown("##### Evolucao - Ultimos 6 Meses")
+    # Calcular vencimentos
+    hoje_date = hoje.date() if hasattr(hoje, 'date') else hoje
 
-    df_tempo = df.copy()
-    df_tempo['MES'] = df_tempo['EMISSAO'].dt.to_period('M')
+    # Vencimentos de hoje
+    df_hoje = df_pendentes[
+        (df_pendentes['VENCIMENTO'].dt.date == hoje_date)
+    ] if len(df_pendentes) > 0 else pd.DataFrame()
 
-    df_grp = df_tempo.groupby('MES').agg({
-        'VALOR_ORIGINAL': 'sum',
-        'SALDO': 'sum'
-    }).reset_index()
-    df_grp['MES'] = df_grp['MES'].astype(str)
-    df_grp['PAGO'] = df_grp['VALOR_ORIGINAL'] - df_grp['SALDO']
-    df_grp = df_grp.tail(6)
+    # Vencimentos de amanha
+    amanha = hoje_date + timedelta(days=1)
+    df_amanha = df_pendentes[
+        (df_pendentes['VENCIMENTO'].dt.date == amanha)
+    ] if len(df_pendentes) > 0 else pd.DataFrame()
 
-    if len(df_grp) > 0:
-        fig = go.Figure()
+    # Vencimentos proximos 7 dias (exceto hoje e amanha)
+    df_semana = df_pendentes[
+        (df_pendentes['VENCIMENTO'].dt.date > amanha) &
+        (df_pendentes['VENCIMENTO'].dt.date <= hoje_date + timedelta(days=7))
+    ] if len(df_pendentes) > 0 else pd.DataFrame()
 
-        fig.add_trace(go.Bar(
-            x=df_grp['MES'],
-            y=df_grp['PAGO'],
-            name='Pago',
-            marker_color=cores['sucesso']
-        ))
+    valor_hoje = df_hoje['SALDO'].sum() if len(df_hoje) > 0 else 0
+    valor_amanha = df_amanha['SALDO'].sum() if len(df_amanha) > 0 else 0
+    valor_semana = df_semana['SALDO'].sum() if len(df_semana) > 0 else 0
+    valor_vencido = df_vencidos['SALDO'].sum() if len(df_vencidos) > 0 else 0
 
-        fig.add_trace(go.Bar(
-            x=df_grp['MES'],
-            y=df_grp['SALDO'],
-            name='Pendente',
-            marker_color=cores['alerta']
-        ))
+    qtd_hoje = len(df_hoje)
+    qtd_amanha = len(df_amanha)
+    qtd_semana = len(df_semana)
+    qtd_vencido = len(df_vencidos)
 
-        fig.update_layout(
-            criar_layout(300, barmode='stack'),
-            showlegend=True,
-            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-            margin=dict(l=10, r=10, t=30, b=30)
-        )
-
-        st.plotly_chart(fig, use_container_width=True)
-    else:
-        st.info("Sem dados suficientes")
-
-
-def _render_proximos_vencimentos(df_pendentes, cores, hoje):
-    """Renderiza proximos vencimentos (30 dias)"""
-
-    st.markdown("##### Proximos Vencimentos (30 dias)")
-
-    if len(df_pendentes) == 0:
-        st.info("Sem vencimentos pendentes")
-        return
-
-    # Filtrar proximos 30 dias (apenas futuros, nao vencidos)
-    df_prox = df_pendentes[
-        (df_pendentes['VENCIMENTO'] >= hoje) &
-        (df_pendentes['VENCIMENTO'] <= hoje + timedelta(days=30))
-    ].copy()
-
-    if len(df_prox) == 0:
-        st.success("Nenhum vencimento nos proximos 30 dias")
-        return
-
-    # Agrupar por semana de forma clara
-    def semana_label(dias):
-        if dias <= 7:
-            return "Semana 1"
-        elif dias <= 14:
-            return "Semana 2"
-        elif dias <= 21:
-            return "Semana 3"
-        else:
-            return "Semana 4"
-
-    df_prox['PERIODO'] = df_prox['DIAS_VENC'].apply(semana_label)
-
-    ordem = ["Semana 1", "Semana 2", "Semana 3", "Semana 4"]
-    df_grp = df_prox.groupby('PERIODO').agg({
-        'SALDO': 'sum',
-        'FORNECEDOR': 'count'
-    }).reindex(ordem, fill_value=0).reset_index()
-    df_grp.columns = ['Periodo', 'Valor', 'Qtd']
-
-    # Cores: mais urgente = mais vermelho, menos urgente = mais verde
-    cores_periodo = [cores['perigo'], cores['alerta'], '#84cc16', cores['sucesso']]
-
-    fig = go.Figure()
-    fig.add_trace(go.Bar(
-        x=df_grp['Periodo'],
-        y=df_grp['Valor'],
-        marker_color=cores_periodo,
-        text=[f"{formatar_moeda(v)}<br>({int(q)} tit)" for v, q in zip(df_grp['Valor'], df_grp['Qtd'])],
-        textposition='outside',
-        textfont=dict(size=9)
-    ))
-
-    fig.update_layout(
-        criar_layout(250),
-        margin=dict(l=10, r=10, t=10, b=30),
-        xaxis_title=None,
-        yaxis_title=None
-    )
-
-    st.plotly_chart(fig, use_container_width=True)
-
-    # Legenda explicativa
-    st.caption(f"""
-    **Semana 1**: Hoje ate {(hoje + timedelta(days=7)).strftime('%d/%m')} |
-    **Semana 2**: {(hoje + timedelta(days=8)).strftime('%d/%m')} a {(hoje + timedelta(days=14)).strftime('%d/%m')} |
-    **Semana 3**: {(hoje + timedelta(days=15)).strftime('%d/%m')} a {(hoje + timedelta(days=21)).strftime('%d/%m')} |
-    **Semana 4**: {(hoje + timedelta(days=22)).strftime('%d/%m')} a {(hoje + timedelta(days=30)).strftime('%d/%m')}
-    """)
+    # Cards de alerta
+    st.markdown(f"""
+    <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 0.75rem; margin-bottom: 1rem;">
+        <div style="background: {cores['perigo']}15; border: 1px solid {cores['perigo']}50;
+                    border-radius: 10px; padding: 1rem; text-align: center;">
+            <p style="color: {cores['perigo']}; font-size: 0.7rem; font-weight: 600; margin: 0; text-transform: uppercase;">
+                Vencido</p>
+            <p style="color: {cores['perigo']}; font-size: 1.4rem; font-weight: 700; margin: 0.25rem 0;">
+                {formatar_moeda(valor_vencido)}</p>
+            <p style="color: {cores['texto_secundario']}; font-size: 0.7rem; margin: 0;">
+                {qtd_vencido} titulos</p>
+        </div>
+        <div style="background: {cores['alerta']}15; border: 1px solid {cores['alerta']}50;
+                    border-radius: 10px; padding: 1rem; text-align: center;">
+            <p style="color: {cores['alerta']}; font-size: 0.7rem; font-weight: 600; margin: 0; text-transform: uppercase;">
+                Vence Hoje</p>
+            <p style="color: {cores['alerta']}; font-size: 1.4rem; font-weight: 700; margin: 0.25rem 0;">
+                {formatar_moeda(valor_hoje)}</p>
+            <p style="color: {cores['texto_secundario']}; font-size: 0.7rem; margin: 0;">
+                {qtd_hoje} titulos</p>
+        </div>
+        <div style="background: {cores['info']}15; border: 1px solid {cores['info']}50;
+                    border-radius: 10px; padding: 1rem; text-align: center;">
+            <p style="color: {cores['info']}; font-size: 0.7rem; font-weight: 600; margin: 0; text-transform: uppercase;">
+                Vence Amanha</p>
+            <p style="color: {cores['info']}; font-size: 1.4rem; font-weight: 700; margin: 0.25rem 0;">
+                {formatar_moeda(valor_amanha)}</p>
+            <p style="color: {cores['texto_secundario']}; font-size: 0.7rem; margin: 0;">
+                {qtd_amanha} titulos</p>
+        </div>
+        <div style="background: {cores['sucesso']}15; border: 1px solid {cores['sucesso']}50;
+                    border-radius: 10px; padding: 1rem; text-align: center;">
+            <p style="color: {cores['sucesso']}; font-size: 0.7rem; font-weight: 600; margin: 0; text-transform: uppercase;">
+                Proximos 7 dias</p>
+            <p style="color: {cores['sucesso']}; font-size: 1.4rem; font-weight: 700; margin: 0.25rem 0;">
+                {formatar_moeda(valor_semana)}</p>
+            <p style="color: {cores['texto_secundario']}; font-size: 0.7rem; margin: 0;">
+                {qtd_semana} titulos</p>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
 
 
-def _render_top_fornecedores(df_pendentes, cores):
-    """Renderiza top fornecedores com saldo pendente"""
+def _render_por_filial(df_pendentes, cores):
+    """Grafico de saldo por filial com codigo"""
 
-    st.markdown("##### Top Fornecedores (Saldo Pendente)")
+    st.markdown("##### Saldo por Filial")
 
     if len(df_pendentes) == 0:
         st.info("Sem saldo pendente")
         return
 
-    df_forn = df_pendentes.groupby('NOME_FORNECEDOR')['SALDO'].sum().nlargest(8).reset_index()
+    # Agrupar por filial com codigo
+    df_filial = df_pendentes.groupby(['FILIAL', 'NOME_FILIAL']).agg({
+        'SALDO': 'sum',
+        'NUMERO': 'count'
+    }).reset_index()
+    df_filial.columns = ['Cod', 'Nome', 'Saldo', 'Qtd']
+    df_filial['Filial'] = df_filial['Cod'].astype(str) + ' - ' + df_filial['Nome'].str[:20]
+    df_filial = df_filial.sort_values('Saldo', ascending=True)
+
+    # Limitar a 12 filiais para visualizacao
+    if len(df_filial) > 12:
+        df_filial = df_filial.tail(12)
+
+    fig = go.Figure()
+
+    fig.add_trace(go.Bar(
+        y=df_filial['Filial'],
+        x=df_filial['Saldo'],
+        orientation='h',
+        marker_color=cores['primaria'],
+        text=[f"{formatar_moeda(v)}" for v in df_filial['Saldo']],
+        textposition='outside',
+        textfont=dict(size=9, color=cores['texto'])
+    ))
+
+    fig.update_layout(
+        criar_layout(350),
+        margin=dict(l=10, r=80, t=10, b=10),
+        xaxis=dict(showticklabels=False, showgrid=False),
+        yaxis=dict(tickfont=dict(size=9, color=cores['texto']))
+    )
+
+    st.plotly_chart(fig, use_container_width=True)
+
+
+def _render_top_categorias(df_pendentes, cores):
+    """Top categorias por saldo"""
+
+    st.markdown("##### Saldo por Categoria")
+
+    if len(df_pendentes) == 0:
+        st.info("Sem saldo pendente")
+        return
+
+    # Agrupar por descricao (categoria)
+    df_cat = df_pendentes.groupby('DESCRICAO').agg({
+        'SALDO': 'sum',
+        'NUMERO': 'count'
+    }).reset_index()
+    df_cat.columns = ['Categoria', 'Saldo', 'Qtd']
+    df_cat = df_cat.sort_values('Saldo', ascending=False).head(10)
+
+    # Cores gradiente
+    n_cats = len(df_cat)
+    cores_grad = [cores['primaria']] * n_cats
+
+    fig = go.Figure()
+
+    fig.add_trace(go.Bar(
+        x=df_cat['Categoria'].str[:20],
+        y=df_cat['Saldo'],
+        marker_color=cores_grad,
+        text=[f"{formatar_moeda(v)}" for v in df_cat['Saldo']],
+        textposition='outside',
+        textfont=dict(size=8, color=cores['texto'])
+    ))
+
+    fig.update_layout(
+        criar_layout(350),
+        margin=dict(l=10, r=10, t=10, b=80),
+        yaxis=dict(showticklabels=False, showgrid=False),
+        xaxis=dict(tickfont=dict(size=8, color=cores['texto']), tickangle=-45)
+    )
+
+    st.plotly_chart(fig, use_container_width=True)
+
+
+def _render_fluxo_caixa(df_pendentes, cores, hoje):
+    """Fluxo de caixa - vencimentos futuros por semana"""
+
+    st.markdown("##### Fluxo de Caixa - Proximas 8 Semanas")
+
+    if len(df_pendentes) == 0:
+        st.info("Sem saldo pendente")
+        return
+
+    hoje_date = hoje.date() if hasattr(hoje, 'date') else hoje
+
+    # Filtrar apenas futuros (incluindo hoje)
+    df_futuro = df_pendentes[df_pendentes['VENCIMENTO'].dt.date >= hoje_date].copy()
+
+    if len(df_futuro) == 0:
+        st.success("Nenhum vencimento futuro pendente")
+        return
+
+    # Agrupar por semana
+    def get_semana(data):
+        if pd.isna(data):
+            return None
+        data_date = data.date() if hasattr(data, 'date') else data
+        dias = (data_date - hoje_date).days
+        if dias < 0:
+            return None
+        semana = dias // 7 + 1
+        return min(semana, 8)  # Limitar a 8 semanas
+
+    df_futuro['SEMANA'] = df_futuro['VENCIMENTO'].apply(get_semana)
+    df_futuro = df_futuro[df_futuro['SEMANA'].notna()]
+
+    df_sem = df_futuro.groupby('SEMANA').agg({
+        'SALDO': 'sum',
+        'NUMERO': 'count'
+    }).reset_index()
+    df_sem.columns = ['Semana', 'Valor', 'Qtd']
+
+    # Preencher semanas faltantes
+    todas_semanas = pd.DataFrame({'Semana': range(1, 9)})
+    df_sem = todas_semanas.merge(df_sem, on='Semana', how='left').fillna(0)
+
+    # Labels das semanas
+    labels = []
+    for i in range(1, 9):
+        inicio = hoje_date + timedelta(days=(i-1)*7)
+        fim = hoje_date + timedelta(days=i*7-1)
+        labels.append(f"S{i}\n{inicio.strftime('%d/%m')}")
+
+    # Cores: mais proximo = mais intenso
+    cores_semana = [
+        cores['perigo'], cores['alerta'], '#f59e0b', '#84cc16',
+        cores['sucesso'], cores['info'], '#8b5cf6', '#6366f1'
+    ]
+
+    fig = go.Figure()
+
+    fig.add_trace(go.Bar(
+        x=labels,
+        y=df_sem['Valor'],
+        marker_color=cores_semana,
+        text=[f"{formatar_moeda(v)}" for v in df_sem['Valor']],
+        textposition='outside',
+        textfont=dict(size=8, color=cores['texto'])
+    ))
+
+    fig.update_layout(
+        criar_layout(320),
+        margin=dict(l=10, r=10, t=10, b=50),
+        yaxis=dict(showticklabels=False, showgrid=False),
+        xaxis=dict(tickfont=dict(size=9, color=cores['texto']))
+    )
+
+    st.plotly_chart(fig, use_container_width=True)
+
+    # Total do periodo
+    total_futuro = df_sem['Valor'].sum()
+    st.caption(f"**Total proximas 8 semanas:** {formatar_moeda(total_futuro)}")
+
+
+def _render_top_fornecedores(df_pendentes, cores):
+    """Top fornecedores com saldo pendente"""
+
+    st.markdown("##### Top 10 Fornecedores")
+
+    if len(df_pendentes) == 0:
+        st.info("Sem saldo pendente")
+        return
+
+    df_forn = df_pendentes.groupby('NOME_FORNECEDOR').agg({
+        'SALDO': 'sum',
+        'NUMERO': 'count'
+    }).reset_index()
+    df_forn.columns = ['Fornecedor', 'Saldo', 'Qtd']
+    df_forn = df_forn.nlargest(10, 'Saldo')
 
     if len(df_forn) == 0:
         st.info("Sem dados")
         return
 
     fig = go.Figure()
+
     fig.add_trace(go.Bar(
-        y=df_forn['NOME_FORNECEDOR'].str[:20],
-        x=df_forn['SALDO'],
+        y=df_forn['Fornecedor'].str[:25],
+        x=df_forn['Saldo'],
         orientation='h',
-        marker_color=cores['primaria'],
-        text=[formatar_moeda(v) for v in df_forn['SALDO']],
+        marker_color=cores['info'],
+        text=[f"{formatar_moeda(v)}" for v in df_forn['Saldo']],
         textposition='outside',
-        textfont=dict(size=9)
+        textfont=dict(size=9, color=cores['texto'])
     ))
 
     fig.update_layout(
-        criar_layout(250),
-        yaxis={'autorange': 'reversed'},
-        margin=dict(l=10, r=60, t=10, b=10)
+        criar_layout(320),
+        yaxis={'autorange': 'reversed', 'tickfont': dict(size=9, color=cores['texto'])},
+        xaxis=dict(showticklabels=False, showgrid=False),
+        margin=dict(l=10, r=80, t=10, b=10)
     )
 
     st.plotly_chart(fig, use_container_width=True)
+
+
+def _render_tabela_filiais(df, df_pendentes, df_vencidos, cores):
+    """Tabela detalhada com metricas por filial"""
+
+    st.markdown("##### Resumo por Filial")
+
+    if len(df) == 0:
+        st.info("Sem dados")
+        return
+
+    # Agrupar dados por filial
+    df_resumo = df.groupby(['FILIAL', 'NOME_FILIAL']).agg({
+        'VALOR_ORIGINAL': 'sum',
+        'SALDO': 'sum',
+        'NUMERO': 'count'
+    }).reset_index()
+
+    # Calcular vencidos por filial
+    df_venc_filial = df_vencidos.groupby('FILIAL')['SALDO'].sum().reset_index()
+    df_venc_filial.columns = ['FILIAL', 'Vencido']
+
+    # Merge
+    df_resumo = df_resumo.merge(df_venc_filial, on='FILIAL', how='left')
+    df_resumo['Vencido'] = df_resumo['Vencido'].fillna(0)
+
+    # Calcular pago
+    df_resumo['Pago'] = df_resumo['VALOR_ORIGINAL'] - df_resumo['SALDO']
+    df_resumo['% Pago'] = (df_resumo['Pago'] / df_resumo['VALOR_ORIGINAL'] * 100).round(1)
+    df_resumo['% Vencido'] = (df_resumo['Vencido'] / df_resumo['SALDO'] * 100).fillna(0).round(1)
+
+    # Renomear colunas
+    df_resumo = df_resumo.rename(columns={
+        'FILIAL': 'Cod',
+        'NOME_FILIAL': 'Filial',
+        'VALOR_ORIGINAL': 'Total',
+        'SALDO': 'Saldo',
+        'NUMERO': 'Titulos'
+    })
+
+    # Ordenar por saldo
+    df_resumo = df_resumo.sort_values('Saldo', ascending=False)
+
+    # Formatar para exibicao
+    df_display = df_resumo[['Cod', 'Filial', 'Titulos', 'Total', 'Pago', 'Saldo', 'Vencido', '% Pago', '% Vencido']].copy()
+    df_display['Total'] = df_display['Total'].apply(formatar_moeda)
+    df_display['Pago'] = df_display['Pago'].apply(formatar_moeda)
+    df_display['Saldo'] = df_display['Saldo'].apply(formatar_moeda)
+    df_display['Vencido'] = df_display['Vencido'].apply(formatar_moeda)
+    df_display['% Pago'] = df_display['% Pago'].apply(lambda x: f"{x:.1f}%")
+    df_display['% Vencido'] = df_display['% Vencido'].apply(lambda x: f"{x:.1f}%")
+    df_display['Titulos'] = df_display['Titulos'].apply(formatar_numero)
+
+    # Exibir tabela
+    st.dataframe(
+        df_display,
+        use_container_width=True,
+        hide_index=True,
+        height=400
+    )

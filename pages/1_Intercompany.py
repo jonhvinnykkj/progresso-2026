@@ -29,11 +29,23 @@ def main():
     cores = get_cores()
     st.markdown(get_css(), unsafe_allow_html=True)
 
-    # Navbar
-    render_navbar(pagina_atual='intercompany', mostrar_filtro_tempo=False)
+    # Navbar com filtro de tempo (ignora filtro de filial por enquanto)
+    navbar_result = render_navbar(pagina_atual='intercompany', mostrar_filtro_tempo=True)
+
+    # Datas do filtro (3 valores: data_inicio, data_fim, filtro_filial)
+    if navbar_result:
+        data_inicio, data_fim, _ = navbar_result
+    else:
+        data_inicio, data_fim = datetime(2000, 1, 1).date(), datetime.now().date()
 
     # Carregar dados para sidebar
     df_pagar, df_receber = carregar_dados_intercompany()
+
+    # Aplicar filtro de data
+    if 'EMISSAO' in df_pagar.columns:
+        df_pagar = df_pagar[(df_pagar['EMISSAO'].dt.date >= data_inicio) & (df_pagar['EMISSAO'].dt.date <= data_fim)]
+    if 'EMISSAO' in df_receber.columns:
+        df_receber = df_receber[(df_receber['EMISSAO'].dt.date >= data_inicio) & (df_receber['EMISSAO'].dt.date <= data_fim)]
 
     hoje = datetime.now()
 
@@ -139,8 +151,8 @@ def main():
         cor=cores['primaria']
     )
 
-    # Renderizar pagina unificada
-    render_intercompany_unificado()
+    # Renderizar pagina unificada (com datas filtradas)
+    render_intercompany_unificado(data_inicio, data_fim)
 
     # Footer
     st.divider()

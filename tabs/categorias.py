@@ -5,6 +5,7 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
+from datetime import datetime, timedelta
 
 from config.theme import get_cores
 from components.charts import criar_layout
@@ -44,6 +45,16 @@ def render_categorias(df):
 
     st.divider()
 
+    # ========== EVOLUCAO MENSAL ==========
+    _render_evolucao_mensal(df, cores)
+
+    st.divider()
+
+    # ========== VARIACAO PERIODO ==========
+    _render_variacao_periodo(df, cores)
+
+    st.divider()
+
     # ========== LINHA 2: Comportamento de Pagamento ==========
     col1, col2 = st.columns(2)
 
@@ -52,6 +63,16 @@ def render_categorias(df):
 
     with col2:
         _render_pontualidade_por_categoria(df_pagos, cores)
+
+    st.divider()
+
+    # ========== SAZONALIDADE ==========
+    _render_sazonalidade(df, cores)
+
+    st.divider()
+
+    # ========== MATRIZ FILIAL x CATEGORIA ==========
+    _render_matriz_filial_categoria(df, cores)
 
     st.divider()
 
@@ -73,6 +94,111 @@ def render_categorias(df):
 
     # ========== RANKING ==========
     _render_ranking(df_cat, df_pagos, cores)
+
+
+def _render_alertas(df, df_cat, df_pagos, cores):
+    """Alertas e insights de categorias"""
+
+    alertas = []
+    hoje = datetime.now()
+
+    # 1. Categoria com maior concentracao em um fornecedor
+    for _, row in df_cat.head(10).iterrows():
+        cat = row['Categoria']
+        df_cat_forn = df[df['DESCRICAO'] == cat].groupby('NOME_FORNECEDOR')['VALOR_ORIGINAL'].sum()
+        if len(df_cat_forn) > 0:
+            total_cat = df_cat_forn.sum()
+            maior_forn = df_cat_forn.idxmax()
+            pct_maior = df_cat_forn.max() / total_cat * 100 if total_cat > 0 else 0
+            if pct_maior > 60 and total_cat > 100000:
+                alertas.append({
+                    'tipo': 'warning',
+                    'icone': '⚠️',
+                    'titulo': 'Concentracao Fornecedor',
+                    'msg': f'{cat[:20]}: {pct_maior:.0f}% em {maior_forn[:15]}'
+                })
+                break
+
+    # 2. Crescimento anormal (>50% vs trimestre anterior)
+    df_atual = df[df['EMISSAO'] >= hoje - timedelta(days=90)]
+    df_anterior = df[(df['EMISSAO'] >= hoje - timedelta(days=180)) & (df['EMISSAO'] < hoje - timedelta(days=90))]
+
+    if len(df_atual) > 0 and len(df_anterior) > 0:
+        atual_grp = df_atual.groupby('DESCRICAO')['VALOR_ORIGINAL'].sum()
+        anterior_grp = df_anterior.groupby('DESCRICAO')['VALOR_ORIGINAL'].sum()
+        comparativo = pd.DataFrame({'atual': atual_grp, 'anterior': anterior_grp}).fillna(0)
+        comparativo['crescimento'] = ((comparativo['atual'] - comparativo['anterior']) / comparativo['anterior'].replace(0, 1)) * 100
+        crescimento_alto = comparativo[(comparativo['crescimento'] > 50) & (comparativo['atual'] > 100000)]
+        if len(crescimento_alto) > 0:
+            top_cresc = crescimento_alto.nlargest(1, 'crescimento')
+            cat = top_cresc.index[0]
+            pct = top_cresc['crescimento'].iloc[0]
+            alertas.append({
+                'tipo': 'success',
+                'icone': '📈',
+                'titulo': 'Crescimento Alto',
+                'msg': f'{cat[:20]}: +{pct:.0f}% vs trimestre anterior'
+            })
+
+        # Queda significativa
+        queda_alta = comparativo[(comparativo['crescimento'] < -30) & (comparativo['anterior'] > 100000)]
+        if len(queda_alta) > 0:
+            top_queda = queda_alta.nsmallest(1, 'crescimento')
+            cat = top_queda.index[0]
+            pct = top_queda['crescimento'].iloc[0]
+            alertas.append({
+                'tipo': 'info',
+                'icone': '📉',
+                'titulo': 'Reducao Significativa',
+                'msg': f'{cat[:20]}: {pct:.0f}% vs trimestre anterior'
+            })
+
+    # 3. Categoria com pior pontualidade
+    if len(df_pagos) > 0 and 'DIAS_ATRASO_PGTO' in df_pagos.columns:
+        def calc_pont(group):
+            atraso = group['DIAS_ATRASO_PGTO'].dropna()
+            if len(atraso) < 10:
+                return None
+            return (atraso <= 0).sum() / len(atraso) * 100
+
+        pont_por_cat = df_pagos.groupby('DESCRICAO').apply(calc_pont).dropna()
+        if len(pont_por_cat) > 0:
+            pior_pont = pont_por_cat.nsmallest(1)
+            cat = pior_pont.index[0]
+            taxa = pior_pont.iloc[0]
+            if taxa < 50:
+                alertas.append({
+                    'tipo': 'error',
+                    'icone': '⏰',
+                    'titulo': 'Baixa Pontualidade',
+                    'msg': f'{cat[:20]}: apenas {taxa:.0f}% no prazo'
+                })
+
+    if len(alertas) == 0:
+        return
+
+    st.markdown("##### Alertas e Insights")
+
+    cols = st.columns(min(len(alertas), 4))
+    for i, alerta in enumerate(alertas[:4]):
+        with cols[i % 4]:
+            cor_borda = {
+                'warning': cores['alerta'],
+                'info': cores['info'],
+                'success': cores['sucesso'],
+                'error': cores['perigo']
+            }.get(alerta['tipo'], cores['borda'])
+
+            st.markdown(f"""
+            <div style="background: {cores['card']}; border: 2px solid {cor_borda};
+                        border-radius: 8px; padding: 0.75rem; height: 100%;">
+                <p style="font-size: 1.2rem; margin: 0 0 0.3rem 0;">{alerta['icone']}</p>
+                <p style="color: {cores['texto']}; font-size: 0.75rem; font-weight: 600; margin: 0 0 0.3rem 0;">
+                    {alerta['titulo']}</p>
+                <p style="color: {cores['texto_secundario']}; font-size: 0.7rem; margin: 0;">
+                    {alerta['msg']}</p>
+            </div>
+            """, unsafe_allow_html=True)
 
 
 def _preparar_dados_categoria(df, df_pagos):
@@ -195,6 +321,314 @@ def _render_treemap(df_cat, cores):
     )
 
     st.plotly_chart(fig, use_container_width=True)
+
+
+def _render_evolucao_mensal(df, cores):
+    """Evolucao mensal das Top 5 categorias"""
+
+    st.markdown("##### Evolucao Mensal - Top 5 Categorias")
+
+    # Identificar top 5 categorias por valor total
+    top5 = df.groupby('DESCRICAO')['VALOR_ORIGINAL'].sum().nlargest(5).index.tolist()
+
+    if len(top5) == 0:
+        st.info("Dados insuficientes")
+        return
+
+    # Filtrar e agrupar por mes
+    df_top = df[df['DESCRICAO'].isin(top5)].copy()
+    df_top['MES'] = df_top['EMISSAO'].dt.to_period('M').astype(str)
+
+    df_pivot = df_top.pivot_table(
+        values='VALOR_ORIGINAL',
+        index='MES',
+        columns='DESCRICAO',
+        aggfunc='sum',
+        fill_value=0
+    ).reset_index()
+
+    if len(df_pivot) < 2:
+        st.info("Historico insuficiente")
+        return
+
+    fig = go.Figure()
+
+    cores_linha = [cores['primaria'], cores['sucesso'], cores['alerta'], cores['info'], cores['perigo']]
+
+    for i, cat in enumerate(top5):
+        if cat in df_pivot.columns:
+            fig.add_trace(go.Scatter(
+                x=df_pivot['MES'],
+                y=df_pivot[cat],
+                name=cat[:20],
+                mode='lines+markers',
+                line=dict(color=cores_linha[i % len(cores_linha)], width=2),
+                marker=dict(size=6)
+            ))
+
+    fig.update_layout(
+        criar_layout(300),
+        margin=dict(l=10, r=10, t=10, b=40),
+        xaxis=dict(tickangle=-45, tickfont=dict(size=9, color=cores['texto'])),
+        yaxis=dict(showticklabels=False, showgrid=True, gridcolor=cores['borda']),
+        legend=dict(
+            orientation='h',
+            yanchor='bottom',
+            y=1.02,
+            xanchor='right',
+            x=1,
+            font=dict(size=9, color=cores['texto'])
+        ),
+        hovermode='x unified'
+    )
+
+    st.plotly_chart(fig, use_container_width=True)
+
+
+def _render_variacao_periodo(df, cores):
+    """Variacao vs periodo anterior"""
+
+    st.markdown("##### Variacao vs Periodo Anterior")
+
+    hoje = datetime.now()
+
+    col1, col2 = st.columns([1, 3])
+
+    with col1:
+        periodo = st.selectbox(
+            "Comparar",
+            ['Ultimos 30 dias', 'Ultimos 90 dias', 'Ultimos 180 dias'],
+            key='var_periodo'
+        )
+
+    dias = {'Ultimos 30 dias': 30, 'Ultimos 90 dias': 90, 'Ultimos 180 dias': 180}[periodo]
+
+    df_atual = df[df['EMISSAO'] >= hoje - timedelta(days=dias)]
+    df_anterior = df[(df['EMISSAO'] >= hoje - timedelta(days=dias*2)) & (df['EMISSAO'] < hoje - timedelta(days=dias))]
+
+    if len(df_atual) == 0 or len(df_anterior) == 0:
+        st.info("Dados insuficientes para comparacao")
+        return
+
+    atual_grp = df_atual.groupby('DESCRICAO')['VALOR_ORIGINAL'].sum()
+    anterior_grp = df_anterior.groupby('DESCRICAO')['VALOR_ORIGINAL'].sum()
+
+    comparativo = pd.DataFrame({
+        'Atual': atual_grp,
+        'Anterior': anterior_grp
+    }).fillna(0)
+    comparativo['Variacao'] = comparativo['Atual'] - comparativo['Anterior']
+    comparativo['Pct'] = ((comparativo['Atual'] - comparativo['Anterior']) / comparativo['Anterior'].replace(0, 1)) * 100
+
+    with col2:
+        tab1, tab2 = st.tabs(["Maior Crescimento", "Maior Reducao"])
+
+        with tab1:
+            df_cresc = comparativo[comparativo['Variacao'] > 0].nlargest(8, 'Variacao').reset_index()
+            df_cresc.columns = ['Categoria', 'Atual', 'Anterior', 'Variacao', 'Pct']
+
+            if len(df_cresc) == 0:
+                st.info("Nenhuma categoria com crescimento")
+            else:
+                fig = go.Figure()
+                fig.add_trace(go.Bar(
+                    y=df_cresc['Categoria'].str[:25],
+                    x=df_cresc['Variacao'],
+                    orientation='h',
+                    marker_color=cores['sucesso'],
+                    text=[f"+{formatar_moeda(v)} ({p:+.0f}%)" for v, p in zip(df_cresc['Variacao'], df_cresc['Pct'])],
+                    textposition='outside',
+                    textfont=dict(size=9, color=cores['texto'])
+                ))
+                fig.update_layout(
+                    criar_layout(250),
+                    margin=dict(l=10, r=120, t=10, b=10),
+                    xaxis=dict(showticklabels=False, showgrid=False),
+                    yaxis=dict(tickfont=dict(size=9, color=cores['texto']), autorange='reversed')
+                )
+                st.plotly_chart(fig, use_container_width=True)
+
+        with tab2:
+            df_queda = comparativo[comparativo['Variacao'] < 0].nsmallest(8, 'Variacao').reset_index()
+            df_queda.columns = ['Categoria', 'Atual', 'Anterior', 'Variacao', 'Pct']
+
+            if len(df_queda) == 0:
+                st.info("Nenhuma categoria com reducao")
+            else:
+                fig = go.Figure()
+                fig.add_trace(go.Bar(
+                    y=df_queda['Categoria'].str[:25],
+                    x=df_queda['Variacao'].abs(),
+                    orientation='h',
+                    marker_color=cores['perigo'],
+                    text=[f"-{formatar_moeda(abs(v))} ({p:.0f}%)" for v, p in zip(df_queda['Variacao'], df_queda['Pct'])],
+                    textposition='outside',
+                    textfont=dict(size=9, color=cores['texto'])
+                ))
+                fig.update_layout(
+                    criar_layout(250),
+                    margin=dict(l=10, r=120, t=10, b=10),
+                    xaxis=dict(showticklabels=False, showgrid=False),
+                    yaxis=dict(tickfont=dict(size=9, color=cores['texto']), autorange='reversed')
+                )
+                st.plotly_chart(fig, use_container_width=True)
+
+
+def _render_sazonalidade(df, cores):
+    """Analise de sazonalidade por categoria"""
+
+    st.markdown("##### Sazonalidade - Padrao Mensal")
+
+    # Top 6 categorias
+    top6 = df.groupby('DESCRICAO')['VALOR_ORIGINAL'].sum().nlargest(6).index.tolist()
+
+    if len(top6) == 0:
+        st.info("Dados insuficientes")
+        return
+
+    col1, col2 = st.columns([1, 3])
+
+    with col1:
+        categoria_sel = st.selectbox(
+            "Categoria",
+            options=top6,
+            key='sazon_cat'
+        )
+
+    df_cat = df[df['DESCRICAO'] == categoria_sel].copy()
+    df_cat['MES_NUM'] = df_cat['EMISSAO'].dt.month
+
+    # Agrupar por mes do ano (media historica)
+    df_sazon = df_cat.groupby('MES_NUM')['VALOR_ORIGINAL'].mean().reset_index()
+    df_sazon['MES_NOME'] = df_sazon['MES_NUM'].map({
+        1: 'Jan', 2: 'Fev', 3: 'Mar', 4: 'Abr', 5: 'Mai', 6: 'Jun',
+        7: 'Jul', 8: 'Ago', 9: 'Set', 10: 'Out', 11: 'Nov', 12: 'Dez'
+    })
+
+    with col2:
+        if len(df_sazon) < 3:
+            st.info("Historico insuficiente para analise de sazonalidade")
+            return
+
+        # Identificar meses de pico e baixa
+        media_geral = df_sazon['VALOR_ORIGINAL'].mean()
+        df_sazon['DESVIO'] = ((df_sazon['VALOR_ORIGINAL'] - media_geral) / media_geral * 100)
+
+        # Cores baseadas no desvio
+        def cor_sazon(desvio):
+            if desvio > 20:
+                return cores['perigo']
+            elif desvio > 10:
+                return cores['alerta']
+            elif desvio < -20:
+                return cores['info']
+            elif desvio < -10:
+                return cores['sucesso']
+            return cores['texto_secundario']
+
+        bar_colors = [cor_sazon(d) for d in df_sazon['DESVIO']]
+
+        fig = go.Figure()
+
+        fig.add_trace(go.Bar(
+            x=df_sazon['MES_NOME'],
+            y=df_sazon['VALOR_ORIGINAL'],
+            marker_color=bar_colors,
+            text=[f"{d:+.0f}%" for d in df_sazon['DESVIO']],
+            textposition='outside',
+            textfont=dict(size=9, color=cores['texto'])
+        ))
+
+        # Linha de media
+        fig.add_hline(
+            y=media_geral,
+            line_dash="dash",
+            line_color=cores['texto'],
+            line_width=1,
+            annotation_text="Media",
+            annotation_position="right"
+        )
+
+        fig.update_layout(
+            criar_layout(250),
+            margin=dict(l=10, r=10, t=10, b=10),
+            xaxis=dict(tickfont=dict(size=10, color=cores['texto'])),
+            yaxis=dict(showticklabels=False, showgrid=False)
+        )
+
+        st.plotly_chart(fig, use_container_width=True)
+
+        # Insights
+        meses_pico = df_sazon[df_sazon['DESVIO'] > 15]['MES_NOME'].tolist()
+        meses_baixa = df_sazon[df_sazon['DESVIO'] < -15]['MES_NOME'].tolist()
+
+        col_a, col_b = st.columns(2)
+        if meses_pico:
+            col_a.caption(f"📈 Picos: {', '.join(meses_pico)}")
+        if meses_baixa:
+            col_b.caption(f"📉 Baixas: {', '.join(meses_baixa)}")
+
+
+def _render_matriz_filial_categoria(df, cores):
+    """Matriz Filial x Categoria (Heatmap)"""
+
+    st.markdown("##### Matriz Filial x Categoria")
+
+    # Top 10 categorias
+    top10_cat = df.groupby('DESCRICAO')['VALOR_ORIGINAL'].sum().nlargest(10).index.tolist()
+
+    if len(top10_cat) == 0 or 'NOME_FILIAL' not in df.columns:
+        st.info("Dados insuficientes")
+        return
+
+    # Filtrar e criar pivot
+    df_matriz = df[df['DESCRICAO'].isin(top10_cat)].copy()
+
+    pivot = df_matriz.pivot_table(
+        values='VALOR_ORIGINAL',
+        index='NOME_FILIAL',
+        columns='DESCRICAO',
+        aggfunc='sum',
+        fill_value=0
+    )
+
+    if pivot.empty:
+        st.info("Dados insuficientes para matriz")
+        return
+
+    # Heatmap
+    fig = go.Figure(data=go.Heatmap(
+        z=pivot.values,
+        x=[f[:18] for f in pivot.columns],
+        y=[f[:25] for f in pivot.index],
+        colorscale=[
+            [0, cores['fundo']],
+            [0.5, cores['info']],
+            [1, cores['primaria']]
+        ],
+        hovertemplate='Filial: %{y}<br>Categoria: %{x}<br>Valor: R$ %{z:,.0f}<extra></extra>'
+    ))
+
+    fig.update_layout(
+        criar_layout(400),
+        margin=dict(l=10, r=10, t=10, b=80),
+        xaxis=dict(tickangle=-45, tickfont=dict(size=8, color=cores['texto'])),
+        yaxis=dict(tickfont=dict(size=9, color=cores['texto']))
+    )
+
+    st.plotly_chart(fig, use_container_width=True)
+
+    # Insights
+    with st.expander("Ver insights da matriz"):
+        # Categoria mais concentrada em uma filial
+        for cat in top10_cat[:5]:
+            if cat in pivot.columns:
+                total_cat = pivot[cat].sum()
+                if total_cat > 0:
+                    max_filial = pivot[cat].idxmax()
+                    pct_max = pivot[cat].max() / total_cat * 100
+                    if pct_max > 60:
+                        st.caption(f"⚠️ **{cat[:25]}**: {pct_max:.0f}% concentrado em {max_filial}")
 
 
 def _render_donut(df_cat, cores):

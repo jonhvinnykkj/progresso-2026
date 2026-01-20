@@ -27,6 +27,7 @@ from tabs.vencimentos import render_vencimentos
 from tabs.fornecedores import render_fornecedores
 from tabs.categorias import render_categorias
 from tabs.formas_pagamento import render_formas_pagamento
+from tabs.tipo_documento import render_tipo_documento
 from tabs.adiantamentos import render_adiantamentos
 from tabs.custos_financeiros import render_custos_financeiros
 from tabs.detalhes import render_detalhes
@@ -66,10 +67,7 @@ def main():
     # Aplicar CSS
     st.markdown(get_css(), unsafe_allow_html=True)
 
-    # NavBar com filtros rapidos de tempo
-    datas_navbar = render_navbar(pagina_atual='pagar', mostrar_filtro_tempo=True)
-
-    # Carregar dados
+    # Carregar dados PRIMEIRO para obter opcoes de filiais
     df_contas, df_adiant, df_baixas = carregar_dados()
 
     # Excluir fornecedores Intercompany dos dados principais (ANTES de tudo)
@@ -77,20 +75,37 @@ def main():
     mask_intercompany = df_contas['NOME_FORNECEDOR'].str.upper().str.contains('|'.join(INTERCOMPANY_PATTERNS), na=False, regex=True)
     df_contas_sem_ic = df_contas[~mask_intercompany].copy()
 
-    # Obter opcoes de filtros (SEM intercompany)
+    # Separar adiantamentos (ADTO FORNECEDOR, etc.) das contas normais
+    # OBS: Os ADTO de Contas a Pagar ja estao em Adiantamentos a pagar.xlsx (98.6% duplicados)
+    # Por isso, removemos de Contas a Pagar para evitar duplicacao
+    mask_adiantamento = df_contas_sem_ic['DESCRICAO'].str.upper().str.contains('ADTO|ADIANT', na=False, regex=True)
+    df_contas_sem_ic = df_contas_sem_ic[~mask_adiantamento].copy()    # Contas normais (sem adiantamentos)
+
+    # Separar custos financeiros/bancos (TAXAS, EMPRESTIMOS, JUROS, etc.)
+    # Esses registros vao para a aba "Custos Financeiros"
+    PADROES_CUSTOS_FINANCEIROS = ['TAXA', 'JUROS', 'BANC', 'EMPRESTIMO', 'MULTA CONTRATUAL', 'IOF', 'ENCARGO']
+    mask_custos_fin = df_contas_sem_ic['DESCRICAO'].str.upper().str.contains('|'.join(PADROES_CUSTOS_FINANCEIROS), na=False, regex=True)
+    df_custos_financeiros = df_contas_sem_ic[mask_custos_fin].copy()  # Apenas bancos/custos financeiros
+    df_contas_sem_ic = df_contas_sem_ic[~mask_custos_fin].copy()      # Contas normais (sem bancos)
+
+    # Obter opcoes de filtros (SEM intercompany e SEM adiantamentos)
     filiais_opcoes, categorias_opcoes = get_opcoes_filtros(df_contas_sem_ic)
 
-    # Datas do filtro rapido da navbar
-    data_inicio, data_fim = datas_navbar if datas_navbar else (datetime(2000, 1, 1).date(), datetime.now().date())
+    # NavBar com filtros rapidos de tempo E FILIAL
+    navbar_result = render_navbar(pagina_atual='pagar', mostrar_filtro_tempo=True, filiais_opcoes=filiais_opcoes)
+    data_inicio, data_fim, filtro_filial_navbar = navbar_result if navbar_result else (datetime(2000, 1, 1).date(), datetime.now().date(), 'Todas as Filiais')
 
     # Apenas ajustar data_inicio ao minimo dos dados (nao limitar data_fim)
     data_min = df_contas_sem_ic['EMISSAO'].min().date()
     data_inicio = max(data_inicio, data_min)
 
     # Renderizar sidebar e obter filtros (SEM intercompany)
-    filtro_filial, filtro_status, filtro_categoria, busca_fornecedor, filtro_tipo_doc, filtro_forma_pagto = render_sidebar(
+    _, filtro_status, filtro_categoria, busca_fornecedor, filtro_tipo_doc, filtro_forma_pagto = render_sidebar(
         df_contas_sem_ic, filiais_opcoes, categorias_opcoes
     )
+
+    # Usar filtro de filial da navbar (principal)
+    filtro_filial = filtro_filial_navbar
 
     # Aplicar filtros (sem intercompany)
     df = aplicar_filtros(
@@ -111,10 +126,10 @@ def main():
         cor=cores['primaria']
     )
 
-    # Tabs (8 tabs)
-    tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
+    # Tabs (9 tabs)
+    tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9 = st.tabs([
         "Visao Geral", "Vencimentos", "Fornecedores", "Categorias",
-        "Formas Pagto", "Custos Financ.", "Adiantamentos", "Detalhes"
+        "Tipo Documento", "Formas Pagto", "Custos Financ.", "Adiantamentos", "Detalhes"
     ])
 
     with tab1:
@@ -131,15 +146,18 @@ def main():
         fragment_categorias(df)
 
     with tab5:
-        fragment_formas_pagamento(df)
+        render_tipo_documento(df)
 
     with tab6:
-        render_custos_financeiros(df)
+        fragment_formas_pagamento(df)
 
     with tab7:
-        render_adiantamentos(df_adiant, df_baixas)
+        render_custos_financeiros(df_custos_financeiros)
 
     with tab8:
+        render_adiantamentos(df_adiant, df_baixas)
+
+    with tab9:
         fragment_detalhes(df)
 
     # Footer

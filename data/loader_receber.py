@@ -5,7 +5,30 @@ import pandas as pd
 import streamlit as st
 from datetime import datetime
 
-from config.settings import CACHE_TTL
+from config.settings import CACHE_TTL, INTERCOMPANY_PADRONIZACAO, INTERCOMPANY_PATTERNS
+
+
+def padronizar_nome_intercompany(nome):
+    """Padroniza nomes de empresas do grupo para comparação correta"""
+    if pd.isna(nome):
+        return nome
+
+    nome_limpo = str(nome).strip().upper()
+
+    # Busca no mapeamento de padronização
+    for variacao, padrao in INTERCOMPANY_PADRONIZACAO.items():
+        if variacao.upper() in nome_limpo:
+            return padrao
+
+    return nome  # Retorna original se não for intercompany
+
+
+def eh_intercompany(nome):
+    """Verifica se o nome é de uma empresa do grupo"""
+    if pd.isna(nome):
+        return False
+    nome_upper = str(nome).strip().upper()
+    return any(p.upper() in nome_upper for p in INTERCOMPANY_PATTERNS)
 
 
 @st.cache_data(ttl=CACHE_TTL)
@@ -21,6 +44,30 @@ def carregar_dados_receber():
     df_contas.columns = [c.upper() for c in df_contas.columns]
     df_adiant.columns = [c.upper() for c in df_adiant.columns]
     df_baixas.columns = [c.upper() for c in df_baixas.columns]
+
+    # Garantir que colunas de nome sejam string (evita erro de tipos mistos no Arrow)
+    # NOME_CLIENTE
+    if 'NOME_CLIENTE' in df_contas.columns:
+        df_contas['NOME_CLIENTE'] = df_contas['NOME_CLIENTE'].astype(str)
+    if 'NOME_CLIENTE' in df_adiant.columns:
+        df_adiant['NOME_CLIENTE'] = df_adiant['NOME_CLIENTE'].astype(str)
+    if 'NOME_CLIENTE' in df_baixas.columns:
+        df_baixas['NOME_CLIENTE'] = df_baixas['NOME_CLIENTE'].astype(str)
+    # NOME_FORNECEDOR (usado em adiantamentos)
+    if 'NOME_FORNECEDOR' in df_contas.columns:
+        df_contas['NOME_FORNECEDOR'] = df_contas['NOME_FORNECEDOR'].astype(str)
+    if 'NOME_FORNECEDOR' in df_adiant.columns:
+        df_adiant['NOME_FORNECEDOR'] = df_adiant['NOME_FORNECEDOR'].astype(str)
+    if 'NOME_FORNECEDOR' in df_baixas.columns:
+        df_baixas['NOME_FORNECEDOR'] = df_baixas['NOME_FORNECEDOR'].astype(str)
+
+    # Limpar espaços da coluna TIPO (vem com espaços do Excel)
+    if 'TIPO' in df_contas.columns:
+        df_contas['TIPO'] = df_contas['TIPO'].str.strip()
+    if 'TIPO' in df_adiant.columns:
+        df_adiant['TIPO'] = df_adiant['TIPO'].str.strip()
+    if 'TIPO' in df_baixas.columns:
+        df_baixas['TIPO'] = df_baixas['TIPO'].str.strip()
 
     # Converter colunas de data
     for col in ['EMISSAO', 'VENCIMENTO', 'VENCTO_REAL', 'DT_BAIXA', 'DT_ESCRITURACAO']:
@@ -92,6 +139,11 @@ def carregar_dados_receber():
     else:
         df_contas['ALERTA_48H'] = False
 
+    # Padronizar nomes de clientes intercompany
+    if 'NOME_CLIENTE' in df_contas.columns:
+        df_contas['CLIENTE_IC_PADRAO'] = df_contas['NOME_CLIENTE'].apply(padronizar_nome_intercompany)
+        df_contas['IS_INTERCOMPANY'] = df_contas['NOME_CLIENTE'].apply(eh_intercompany)
+
     # Garantir valores numéricos para colunas financeiras
     colunas_financeiras = ['VALOR_JUROS', 'VALOR_MULTA', 'VLR_DESCONTO', 'VALOR_CORRECAO',
                            'VALOR_ACRESCIMO', 'VALOR_DECRESCIMO', 'TX_MOEDA', 'VALOR_REAL']
@@ -114,7 +166,12 @@ def aplicar_filtros_receber(df_contas, data_inicio, data_fim, filtro_filial, fil
 
     # Aplicar filtros adicionais
     if filtro_filial != 'Todas as Filiais':
-        mask &= (df_contas['NOME_FILIAL'] == filtro_filial)
+        # Extrair código da filial do formato "COD - NOME"
+        if ' - ' in filtro_filial:
+            cod_filial = int(filtro_filial.split(' - ')[0])
+            mask &= (df_contas['FILIAL'] == cod_filial)
+        else:
+            mask &= (df_contas['NOME_FILIAL'] == filtro_filial)
 
     if filtro_status != 'Todos os Status':
         if filtro_status == 'Recebido':
@@ -144,9 +201,15 @@ def aplicar_filtros_receber(df_contas, data_inicio, data_fim, filtro_filial, fil
 @st.cache_data
 def get_opcoes_filtros_receber(_df_contas):
     """Pré-calcula as opções de filtros"""
-    filiais = ['Todas as Filiais'] + sorted(_df_contas['NOME_FILIAL'].dropna().unique().tolist())
+    # Criar opções de filial com código + nome
+    filiais_df = _df_contas[['FILIAL', 'NOME_FILIAL']].drop_duplicates().dropna()
+    filiais_df = filiais_df.sort_values('FILIAL')
+    filiais_opcoes = ['Todas as Filiais'] + [
+        f"{row['FILIAL']} - {row['NOME_FILIAL']}"
+        for _, row in filiais_df.iterrows()
+    ]
     categorias = ['Todas as Categorias'] + sorted(_df_contas['DESCRICAO'].dropna().unique().tolist())
-    return filiais, categorias
+    return filiais_opcoes, categorias
 
 
 def get_dados_filtrados_receber(df, df_contas):

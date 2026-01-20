@@ -1,120 +1,215 @@
 """
-Aba Fornecedores - Analise completa por fornecedor com comportamento de pagamento
+Aba Fornecedores - Contas a Pagar por Fornecedor
+Foco em valores pagos e pendentes, não em vencimentos
 """
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
-import plotly.express as px
-from datetime import datetime
+from datetime import datetime, timedelta
+import numpy as np
 
 from config.theme import get_cores
 from components.charts import criar_layout
 from utils.formatters import formatar_moeda, formatar_numero
-from utils.data_helpers import get_df_pendentes, get_df_vencidos
 
 
 def render_fornecedores(df):
-    """Renderiza a aba de Fornecedores"""
+    """Renderiza a aba de Fornecedores - Contas a Pagar"""
     cores = get_cores()
 
     if len(df) == 0:
         st.warning("Nenhum dado disponivel.")
         return
 
-    # Calcular dataframes
-    df_pendentes = get_df_pendentes(df)
-    df_vencidos = get_df_vencidos(df)
-    df_pagos = df[df['SALDO'] == 0].copy()
+    # ========== ALERTAS E INSIGHTS ==========
+    _render_alertas(df, cores)
+
+    st.divider()
 
     # ========== KPIs ==========
-    _render_kpis(df, df_pendentes, df_pagos, cores)
+    _render_kpis(df, cores)
 
     st.divider()
 
-    # ========== LINHA 1: Valor e Pendencia ==========
-    col1, col2 = st.columns(2)
-
-    with col1:
-        _render_top_valor(df, cores)
-
-    with col2:
-        _render_top_pendente(df_pendentes, cores)
+    # ========== TOP FORNECEDORES (Valor Total) ==========
+    _render_top_fornecedores(df, cores)
 
     st.divider()
 
-    # ========== LINHA 2: Prazo Concedido pelo Fornecedor ==========
-    col1, col2 = st.columns(2)
-
-    with col1:
-        _render_prazo_concedido(df, cores)
-
-    with col2:
-        _render_comparativo_prazos(df, df_pagos, cores)
+    # ========== EVOLUCAO TOP 5 ==========
+    _render_evolucao_top5(df, cores)
 
     st.divider()
 
-    # ========== LINHA 3: Comportamento de Pagamento ==========
-    col1, col2 = st.columns(2)
-
-    with col1:
-        _render_prazo_por_fornecedor(df_pagos, cores)
-
-    with col2:
-        _render_pontualidade_por_fornecedor(df_pagos, cores)
+    # ========== PRAZOS DE PAGAMENTO ==========
+    _render_prazos_pagamento(df, cores)
 
     st.divider()
 
-    # ========== LINHA 4: Analise de Risco e ABC ==========
+    # ========== CURVA ABC + CONCENTRACAO ==========
     col1, col2 = st.columns(2)
 
     with col1:
-        _render_matriz_risco(df, df_vencidos, cores)
-
-    with col2:
         _render_curva_abc(df, cores)
 
+    with col2:
+        _render_concentracao(df, cores)
+
     st.divider()
 
-    # ========== BUSCA FORNECEDOR ==========
-    _render_busca_fornecedor(df, df_pendentes, df_pagos, cores)
+    # ========== NOVOS E INATIVOS ==========
+    col1, col2 = st.columns(2)
+
+    with col1:
+        _render_novos_fornecedores(df, cores)
+
+    with col2:
+        _render_inativos(df, cores)
+
+    st.divider()
+
+    # ========== MATRIZ FILIAL x FORNECEDOR ==========
+    _render_matriz_filial_fornecedor(df, cores)
+
+    st.divider()
+
+    # ========== POR CATEGORIA ==========
+    _render_por_categoria(df, cores)
+
+    st.divider()
+
+    # ========== TOP PENDENTES ==========
+    _render_top_pendentes(df, cores)
+
+    st.divider()
+
+    # ========== CONSULTA FORNECEDOR ==========
+    _render_consulta_fornecedor(df, cores)
 
     st.divider()
 
     # ========== RANKING ==========
-    _render_ranking(df, df_pagos, cores)
+    _render_ranking(df, cores)
 
 
-def _render_kpis(df, df_pendentes, df_pagos, cores):
-    """KPIs principais"""
+def _render_alertas(df, cores):
+    """Alertas e insights automaticos"""
+
+    alertas = []
+    hoje = datetime.now()
+
+    # 1. Concentracao excessiva (>30% em um fornecedor)
+    total = df['VALOR_ORIGINAL'].sum()
+    df_forn = df.groupby('NOME_FORNECEDOR')['VALOR_ORIGINAL'].sum().sort_values(ascending=False)
+    if len(df_forn) > 0:
+        maior_forn = df_forn.index[0]
+        pct_maior = df_forn.iloc[0] / total * 100 if total > 0 else 0
+        if pct_maior > 30:
+            alertas.append({
+                'tipo': 'warning',
+                'icone': '⚠️',
+                'titulo': 'Concentracao Excessiva',
+                'msg': f'{maior_forn[:25]} representa {pct_maior:.1f}% do total'
+            })
+
+    # 2. Fornecedores novos com alto volume (>R$100k nos ultimos 60 dias)
+    df_novo = df.copy()
+    df_novo['PRIMEIRA_COMPRA'] = df_novo.groupby('NOME_FORNECEDOR')['EMISSAO'].transform('min')
+    limite_novo = hoje - timedelta(days=60)
+    novos_alto_vol = df_novo[df_novo['PRIMEIRA_COMPRA'] >= limite_novo].groupby('NOME_FORNECEDOR')['VALOR_ORIGINAL'].sum()
+    novos_alto_vol = novos_alto_vol[novos_alto_vol > 100000]
+    if len(novos_alto_vol) > 0:
+        for forn, valor in novos_alto_vol.head(3).items():
+            alertas.append({
+                'tipo': 'info',
+                'icone': '🆕',
+                'titulo': 'Novo Fornecedor Alto Volume',
+                'msg': f'{forn[:25]}: {formatar_moeda(valor)} em 60 dias'
+            })
+
+    # 3. Crescimento anormal (>50% vs periodo anterior)
+    df_atual = df[df['EMISSAO'] >= hoje - timedelta(days=90)]
+    df_anterior = df[(df['EMISSAO'] >= hoje - timedelta(days=180)) & (df['EMISSAO'] < hoje - timedelta(days=90))]
+
+    if len(df_atual) > 0 and len(df_anterior) > 0:
+        atual_grp = df_atual.groupby('NOME_FORNECEDOR')['VALOR_ORIGINAL'].sum()
+        anterior_grp = df_anterior.groupby('NOME_FORNECEDOR')['VALOR_ORIGINAL'].sum()
+        comparativo = pd.DataFrame({'atual': atual_grp, 'anterior': anterior_grp}).fillna(0)
+        comparativo['crescimento'] = ((comparativo['atual'] - comparativo['anterior']) / comparativo['anterior'].replace(0, 1)) * 100
+        crescimento_alto = comparativo[(comparativo['crescimento'] > 50) & (comparativo['atual'] > 50000)]
+        crescimento_alto = crescimento_alto.nlargest(2, 'crescimento')
+        for forn in crescimento_alto.index:
+            alertas.append({
+                'tipo': 'success',
+                'icone': '📈',
+                'titulo': 'Crescimento Acima de 50%',
+                'msg': f'{forn[:25]}: +{crescimento_alto.loc[forn, "crescimento"]:.0f}% vs trimestre anterior'
+            })
+
+    # 4. Fornecedor com maior atraso medio
+    df_pagos = df[df['SALDO'] == 0].copy()
+    if 'DT_BAIXA' in df_pagos.columns and len(df_pagos) > 0:
+        df_pagos['ATRASO'] = (df_pagos['DT_BAIXA'] - df_pagos['VENCIMENTO']).dt.days
+        atraso_medio = df_pagos[df_pagos['ATRASO'] > 0].groupby('NOME_FORNECEDOR')['ATRASO'].mean()
+        if len(atraso_medio) > 0:
+            pior_atraso = atraso_medio.nlargest(1)
+            forn_atraso = pior_atraso.index[0]
+            dias_atraso = pior_atraso.iloc[0]
+            if dias_atraso > 15:
+                alertas.append({
+                    'tipo': 'error',
+                    'icone': '⏰',
+                    'titulo': 'Maior Atraso Medio',
+                    'msg': f'{forn_atraso[:25]}: {dias_atraso:.0f} dias de atraso medio'
+                })
+
+    if len(alertas) == 0:
+        return
+
+    st.markdown("##### Alertas e Insights")
+
+    # Exibir em cards
+    cols = st.columns(min(len(alertas), 4))
+    for i, alerta in enumerate(alertas[:4]):
+        with cols[i % 4]:
+            cor_borda = {
+                'warning': cores['alerta'],
+                'info': cores['info'],
+                'success': cores['sucesso'],
+                'error': cores['perigo']
+            }.get(alerta['tipo'], cores['borda'])
+
+            st.markdown(f"""
+            <div style="background: {cores['card']}; border: 2px solid {cor_borda};
+                        border-radius: 8px; padding: 0.75rem; height: 100%;">
+                <p style="font-size: 1.2rem; margin: 0 0 0.3rem 0;">{alerta['icone']}</p>
+                <p style="color: {cores['texto']}; font-size: 0.75rem; font-weight: 600; margin: 0 0 0.3rem 0;">
+                    {alerta['titulo']}</p>
+                <p style="color: {cores['texto_secundario']}; font-size: 0.7rem; margin: 0;">
+                    {alerta['msg']}</p>
+            </div>
+            """, unsafe_allow_html=True)
+
+
+def _render_kpis(df, cores):
+    """KPIs principais - foco em valores pagos/pendentes"""
 
     total_fornecedores = df['NOME_FORNECEDOR'].nunique()
     total_valor = df['VALOR_ORIGINAL'].sum()
-    total_pendente = df_pendentes['SALDO'].sum() if len(df_pendentes) > 0 else 0
+    total_pendente = df['SALDO'].sum()
+    total_pago = total_valor - total_pendente
 
-    # Taxa pontualidade geral
-    taxa_pontual = 0
-    if len(df_pagos) > 0 and 'DIAS_ATRASO_PGTO' in df_pagos.columns:
-        atraso = df_pagos['DIAS_ATRASO_PGTO'].dropna()
-        if len(atraso) > 0:
-            taxa_pontual = (atraso <= 0).sum() / len(atraso) * 100
+    pct_pago = (total_pago / total_valor * 100) if total_valor > 0 else 0
 
-    # Tempo medio para pagar (da emissao ate o pagamento)
-    tempo_medio_pgto = 0
-    if len(df_pagos) > 0 and 'DIAS_PARA_PAGAR' in df_pagos.columns:
-        dias = df_pagos['DIAS_PARA_PAGAR'].dropna()
-        # Filtrar apenas valores positivos (emissao antes do pagamento)
-        dias_validos = dias[dias > 0]
-        if len(dias_validos) > 0:
-            tempo_medio_pgto = dias_validos.mean()
-
-    # Fornecedores com atraso
-    forn_com_atraso = df_pendentes[df_pendentes['STATUS'] == 'Vencido']['NOME_FORNECEDOR'].nunique() if len(df_pendentes) > 0 else 0
+    # Concentracao top 10
+    df_top10 = df.groupby('NOME_FORNECEDOR')['VALOR_ORIGINAL'].sum().nlargest(10)
+    pct_top10 = (df_top10.sum() / total_valor * 100) if total_valor > 0 else 0
 
     col1, col2, col3, col4, col5 = st.columns(5)
 
     with col1:
         st.metric(
-            label="Total Fornecedores",
+            label="Fornecedores",
             value=formatar_numero(total_fornecedores),
             delta=f"{formatar_numero(len(df))} titulos",
             delta_color="off"
@@ -123,492 +218,510 @@ def _render_kpis(df, df_pendentes, df_pagos, cores):
     with col2:
         st.metric(
             label="Valor Total",
-            value=formatar_moeda(total_valor),
-            delta=f"Pendente: {formatar_moeda(total_pendente)}",
-            delta_color="off"
+            value=formatar_moeda(total_valor)
         )
 
     with col3:
         st.metric(
-            label="Taxa Pontualidade",
-            value=f"{taxa_pontual:.1f}%",
-            delta="pagos no prazo",
+            label="Total Pago",
+            value=formatar_moeda(total_pago),
+            delta=f"{pct_pago:.1f}%",
             delta_color="off"
         )
 
     with col4:
         st.metric(
-            label="Tempo Medio p/ Pagar",
-            value=f"{tempo_medio_pgto:.0f} dias",
-            delta="da NF ate o pagamento",
-            delta_color="off"
+            label="Total Pendente",
+            value=formatar_moeda(total_pendente)
         )
 
     with col5:
-        pct_atraso = (forn_com_atraso / total_fornecedores * 100) if total_fornecedores > 0 else 0
         st.metric(
-            label="Forn. com Atraso",
-            value=formatar_numero(forn_com_atraso),
-            delta=f"{pct_atraso:.1f}% do total",
+            label="Concentracao Top 10",
+            value=f"{pct_top10:.1f}%",
+            delta="do valor total",
             delta_color="off"
         )
 
 
-def _render_top_valor(df, cores):
-    """Top 10 por valor total"""
+def _render_top_fornecedores(df, cores):
+    """Top 15 fornecedores por valor total - Pago vs Pendente"""
 
-    st.markdown("##### Top 10 - Valor Total")
+    st.markdown("##### Top 15 Fornecedores - Valor Total")
 
+    # Agrupar por fornecedor
     df_forn = df.groupby('NOME_FORNECEDOR').agg({
         'VALOR_ORIGINAL': 'sum',
         'SALDO': 'sum',
-        'FORNECEDOR': 'count'
-    }).nlargest(10, 'VALOR_ORIGINAL').reset_index()
+        'NUMERO': 'count'
+    }).reset_index()
+    df_forn.columns = ['Fornecedor', 'Total', 'Pendente', 'Qtd']
+    df_forn['Pago'] = df_forn['Total'] - df_forn['Pendente']
 
-    df_forn['PAGO'] = df_forn['VALOR_ORIGINAL'] - df_forn['SALDO']
+    # Top 15
+    df_top = df_forn.nlargest(15, 'Total')
+    df_top = df_top.sort_values('Total', ascending=True)
 
     fig = go.Figure()
 
+    # Pago
     fig.add_trace(go.Bar(
-        y=df_forn['NOME_FORNECEDOR'].str[:25],
-        x=df_forn['PAGO'],
+        y=df_top['Fornecedor'].str[:35],
+        x=df_top['Pago'],
         orientation='h',
         name='Pago',
         marker_color=cores['sucesso'],
-        text=[formatar_moeda(v) for v in df_forn['PAGO']],
+        text=[formatar_moeda(v) if v > 0 else '' for v in df_top['Pago']],
         textposition='inside',
         textfont=dict(size=9, color='white')
     ))
 
+    # Pendente
     fig.add_trace(go.Bar(
-        y=df_forn['NOME_FORNECEDOR'].str[:25],
-        x=df_forn['SALDO'],
+        y=df_top['Fornecedor'].str[:35],
+        x=df_top['Pendente'],
         orientation='h',
         name='Pendente',
         marker_color=cores['alerta'],
-        text=[formatar_moeda(v) for v in df_forn['SALDO']],
+        text=[formatar_moeda(v) if v > 0 else '' for v in df_top['Pendente']],
         textposition='inside',
         textfont=dict(size=9, color='white')
     ))
 
     fig.update_layout(
-        criar_layout(300, barmode='stack'),
-        yaxis={'autorange': 'reversed'},
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-        margin=dict(l=10, r=10, t=30, b=10)
+        criar_layout(450),
+        barmode='stack',
+        margin=dict(l=10, r=10, t=10, b=10),
+        xaxis=dict(showticklabels=False, showgrid=False),
+        yaxis=dict(tickfont=dict(size=10, color=cores['texto'])),
+        legend=dict(
+            orientation='h',
+            yanchor='bottom',
+            y=1.02,
+            xanchor='right',
+            x=1,
+            font=dict(size=10, color=cores['texto'])
+        )
     )
 
     st.plotly_chart(fig, use_container_width=True)
 
 
-def _render_top_pendente(df_pendentes, cores):
-    """Top 10 com mais saldo pendente"""
+def _render_evolucao_top5(df, cores):
+    """Evolucao mensal dos Top 5 fornecedores"""
 
-    st.markdown("##### Top 10 - Saldo Pendente")
+    st.markdown("##### Evolucao Mensal - Top 5 Fornecedores")
 
-    if len(df_pendentes) == 0:
-        st.info("Sem saldo pendente")
+    # Identificar top 5 fornecedores por valor total
+    top5 = df.groupby('NOME_FORNECEDOR')['VALOR_ORIGINAL'].sum().nlargest(5).index.tolist()
+
+    if len(top5) == 0:
+        st.info("Dados insuficientes")
         return
 
-    df_pend = df_pendentes.groupby('NOME_FORNECEDOR').agg({
-        'SALDO': 'sum',
-        'DIAS_ATRASO': 'max',
-        'FORNECEDOR': 'count'
-    }).nlargest(10, 'SALDO').reset_index()
+    # Filtrar e agrupar por mes
+    df_top = df[df['NOME_FORNECEDOR'].isin(top5)].copy()
+    df_top['MES'] = df_top['EMISSAO'].dt.to_period('M').astype(str)
 
-    def cor_atraso(dias):
-        if dias > 30:
-            return cores['perigo']
-        elif dias > 15:
-            return '#f97316'
-        elif dias > 0:
-            return cores['alerta']
-        return cores['primaria']
+    df_pivot = df_top.pivot_table(
+        values='VALOR_ORIGINAL',
+        index='MES',
+        columns='NOME_FORNECEDOR',
+        aggfunc='sum',
+        fill_value=0
+    ).reset_index()
 
-    bar_colors = [cor_atraso(d) for d in df_pend['DIAS_ATRASO']]
-
-    fig = go.Figure(go.Bar(
-        y=df_pend['NOME_FORNECEDOR'].str[:25],
-        x=df_pend['SALDO'],
-        orientation='h',
-        marker_color=bar_colors,
-        text=[f"{formatar_moeda(v)} ({int(d)}d)" for v, d in zip(df_pend['SALDO'], df_pend['DIAS_ATRASO'])],
-        textposition='outside',
-        textfont=dict(size=9)
-    ))
-
-    fig.update_layout(
-        criar_layout(300),
-        yaxis={'autorange': 'reversed'},
-        margin=dict(l=10, r=80, t=10, b=10)
-    )
-
-    st.plotly_chart(fig, use_container_width=True)
-    st.caption("Cor: Em dia | 1-15d | 16-30d | 30+d atraso")
-
-
-def _render_prazo_concedido(df, cores):
-    """Prazo concedido pelo fornecedor (Emissao -> Vencimento)"""
-
-    st.markdown("##### Prazo Concedido pelo Fornecedor")
-    st.caption("Dias entre Emissao da NF e Vencimento")
-
-    # Calcular prazo concedido (vencimento - emissao)
-    df_calc = df.copy()
-    df_calc['PRAZO_CONCEDIDO'] = (df_calc['VENCIMENTO'] - df_calc['EMISSAO']).dt.days
-
-    # Remover valores invalidos
-    df_calc = df_calc[df_calc['PRAZO_CONCEDIDO'].notna() & (df_calc['PRAZO_CONCEDIDO'] >= 0)]
-
-    if len(df_calc) == 0:
-        st.info("Sem dados para calcular prazo concedido")
+    if len(df_pivot) < 2:
+        st.info("Historico insuficiente para mostrar evolucao")
         return
-
-    # Agrupar por fornecedor
-    df_prazo = df_calc.groupby('NOME_FORNECEDOR').agg({
-        'PRAZO_CONCEDIDO': 'mean',
-        'VALOR_ORIGINAL': ['sum', 'count']
-    }).reset_index()
-    df_prazo.columns = ['Fornecedor', 'Prazo_Medio', 'Valor', 'Qtd']
-
-    # Top 10 fornecedores com maior prazo (melhores para nosso fluxo de caixa)
-    df_top = df_prazo.nlargest(10, 'Prazo_Medio')
-
-    def cor_prazo(p):
-        if p >= 60:
-            return cores['sucesso']  # Excelente
-        elif p >= 45:
-            return '#84cc16'  # Muito bom
-        elif p >= 30:
-            return cores['info']  # Bom
-        elif p >= 15:
-            return cores['alerta']  # Regular
-        return cores['perigo']  # Ruim
-
-    bar_colors = [cor_prazo(p) for p in df_top['Prazo_Medio']]
-
-    fig = go.Figure(go.Bar(
-        y=df_top['Fornecedor'].str[:25],
-        x=df_top['Prazo_Medio'],
-        orientation='h',
-        marker_color=bar_colors,
-        text=[f"{p:.0f}d" for p in df_top['Prazo_Medio']],
-        textposition='outside',
-        textfont=dict(size=10)
-    ))
-
-    fig.update_layout(
-        criar_layout(280),
-        yaxis={'autorange': 'reversed'},
-        margin=dict(l=10, r=50, t=10, b=10),
-        xaxis_title='Dias'
-    )
-
-    st.plotly_chart(fig, use_container_width=True)
-
-    # Metricas resumidas
-    col1, col2, col3 = st.columns(3)
-    prazo_geral = df_calc['PRAZO_CONCEDIDO'].mean()
-    col1.metric("Prazo Medio Geral", f"{prazo_geral:.0f} dias")
-
-    forn_30plus = len(df_prazo[df_prazo['Prazo_Medio'] >= 30])
-    col2.metric("Forn. 30+ dias", formatar_numero(forn_30plus))
-
-    forn_60plus = len(df_prazo[df_prazo['Prazo_Medio'] >= 60])
-    col3.metric("Forn. 60+ dias", formatar_numero(forn_60plus))
-
-
-def _render_comparativo_prazos(df, df_pagos, cores):
-    """Comparativo: Prazo concedido vs Prazo real de pagamento"""
-
-    st.markdown("##### Prazo Concedido vs Prazo Real")
-    st.caption("Comparacao entre prazo do fornecedor e tempo real de pagamento")
-
-    if len(df_pagos) == 0 or 'DIAS_PARA_PAGAR' not in df_pagos.columns:
-        st.info("Sem dados de pagamentos realizados")
-        return
-
-    # Calcular prazo concedido nos pagos
-    df_calc = df_pagos.copy()
-    df_calc['PRAZO_CONCEDIDO'] = (df_calc['VENCIMENTO'] - df_calc['EMISSAO']).dt.days
-
-    # Filtrar dados validos
-    df_calc = df_calc[
-        df_calc['PRAZO_CONCEDIDO'].notna() &
-        df_calc['DIAS_PARA_PAGAR'].notna() &
-        (df_calc['PRAZO_CONCEDIDO'] >= 0)
-    ]
-
-    if len(df_calc) == 0:
-        st.info("Sem dados para comparacao")
-        return
-
-    # Agrupar por fornecedor
-    df_comp = df_calc.groupby('NOME_FORNECEDOR').agg({
-        'PRAZO_CONCEDIDO': 'mean',
-        'DIAS_PARA_PAGAR': 'mean',
-        'VALOR_ORIGINAL': 'sum'
-    }).reset_index()
-    df_comp.columns = ['Fornecedor', 'Prazo_Concedido', 'Prazo_Real', 'Valor']
-
-    # Calcular diferenca (positivo = pagamos antes do prazo)
-    df_comp['Diferenca'] = df_comp['Prazo_Concedido'] - df_comp['Prazo_Real']
-
-    # Filtrar top 15 por valor
-    df_top = df_comp.nlargest(15, 'Valor')
 
     fig = go.Figure()
 
-    # Barras do prazo concedido
-    fig.add_trace(go.Bar(
-        y=df_top['Fornecedor'].str[:20],
-        x=df_top['Prazo_Concedido'],
-        orientation='h',
-        name='Prazo Concedido',
-        marker_color=cores['info'],
-        opacity=0.7
-    ))
+    cores_linha = [cores['primaria'], cores['sucesso'], cores['alerta'], cores['info'], cores['perigo']]
 
-    # Barras do prazo real
-    fig.add_trace(go.Bar(
-        y=df_top['Fornecedor'].str[:20],
-        x=df_top['Prazo_Real'],
-        orientation='h',
-        name='Prazo Real',
-        marker_color=cores['primaria']
-    ))
+    for i, forn in enumerate(top5):
+        if forn in df_pivot.columns:
+            fig.add_trace(go.Scatter(
+                x=df_pivot['MES'],
+                y=df_pivot[forn],
+                name=forn[:20],
+                mode='lines+markers',
+                line=dict(color=cores_linha[i % len(cores_linha)], width=2),
+                marker=dict(size=6)
+            ))
 
     fig.update_layout(
-        criar_layout(300, barmode='group'),
-        yaxis={'autorange': 'reversed'},
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="center", x=0.5),
-        margin=dict(l=10, r=10, t=30, b=10),
-        xaxis_title='Dias'
+        criar_layout(300),
+        margin=dict(l=10, r=10, t=10, b=40),
+        xaxis=dict(tickangle=-45, tickfont=dict(size=9, color=cores['texto'])),
+        yaxis=dict(showticklabels=False, showgrid=True, gridcolor=cores['borda']),
+        legend=dict(
+            orientation='h',
+            yanchor='bottom',
+            y=1.02,
+            xanchor='right',
+            x=1,
+            font=dict(size=9, color=cores['texto'])
+        ),
+        hovermode='x unified'
     )
 
     st.plotly_chart(fig, use_container_width=True)
+
+
+def _render_novos_fornecedores(df, cores):
+    """Fornecedores novos (primeira compra recente)"""
+
+    st.markdown("##### Novos Fornecedores")
+
+    hoje = datetime.now()
+
+    # Encontrar primeira compra de cada fornecedor
+    df_primeira = df.groupby('NOME_FORNECEDOR').agg({
+        'EMISSAO': 'min',
+        'VALOR_ORIGINAL': 'sum',
+        'NUMERO': 'count'
+    }).reset_index()
+    df_primeira.columns = ['Fornecedor', 'Primeira Compra', 'Valor Total', 'Qtd']
+
+    # Filtros
+    periodo = st.selectbox(
+        "Periodo",
+        ['Ultimos 30 dias', 'Ultimos 60 dias', 'Ultimos 90 dias'],
+        key='novos_periodo'
+    )
+
+    dias = {'Ultimos 30 dias': 30, 'Ultimos 60 dias': 60, 'Ultimos 90 dias': 90}[periodo]
+    limite = hoje - timedelta(days=dias)
+
+    df_novos = df_primeira[df_primeira['Primeira Compra'] >= limite].copy()
+    df_novos = df_novos.sort_values('Valor Total', ascending=False)
+
+    if len(df_novos) == 0:
+        st.info(f"Nenhum fornecedor novo nos {periodo.lower()}")
+        return
 
     # Metricas
-    col1, col2, col3 = st.columns(3)
-
-    prazo_conc_medio = df_comp['Prazo_Concedido'].mean()
-    prazo_real_medio = df_comp['Prazo_Real'].mean()
-    diferenca_media = prazo_conc_medio - prazo_real_medio
-
-    col1.metric("Prazo Medio Concedido", f"{prazo_conc_medio:.0f} dias")
-    col2.metric("Prazo Real Medio", f"{prazo_real_medio:.0f} dias")
-
-    if diferenca_media > 0:
-        col3.metric("Margem de Folga", f"{diferenca_media:.0f} dias", "pagamos antes")
-    else:
-        col3.metric("Atraso Medio", f"{abs(diferenca_media):.0f} dias", "alem do prazo", delta_color="inverse")
-
-
-def _render_prazo_por_fornecedor(df_pagos, cores):
-    """Tempo real de pagamento por fornecedor (Emissao -> Baixa)"""
-
-    st.markdown("##### Tempo Real de Pagamento")
-    st.caption("Dias entre Emissao da NF e Data da Baixa (pagamento)")
-
-    if len(df_pagos) == 0 or 'DIAS_PARA_PAGAR' not in df_pagos.columns:
-        st.info("Sem dados de pagamento")
-        return
-
-    df_prazo = df_pagos.groupby('NOME_FORNECEDOR').agg({
-        'DIAS_PARA_PAGAR': 'mean',
-        'VALOR_ORIGINAL': ['sum', 'count']
-    }).reset_index()
-    df_prazo.columns = ['Fornecedor', 'Prazo', 'Valor', 'Qtd']
-    df_prazo = df_prazo.dropna(subset=['Prazo'])
-
-    # Top 10 com maior tempo para pagar (mais lento)
-    df_top = df_prazo.nlargest(10, 'Prazo')
-
-    def cor_prazo(p):
-        if p <= 30:
-            return cores['sucesso']
-        elif p <= 45:
-            return cores['info']
-        elif p <= 60:
-            return cores['alerta']
-        return cores['perigo']
-
-    bar_colors = [cor_prazo(p) for p in df_top['Prazo']]
-
-    fig = go.Figure(go.Bar(
-        y=df_top['Fornecedor'].str[:25],
-        x=df_top['Prazo'],
-        orientation='h',
-        marker_color=bar_colors,
-        text=[f"{p:.0f}d" for p in df_top['Prazo']],
-        textposition='outside',
-        textfont=dict(size=10)
-    ))
-
-    fig.update_layout(
-        criar_layout(300),
-        yaxis={'autorange': 'reversed'},
-        margin=dict(l=10, r=50, t=10, b=10),
-        xaxis_title='Dias'
+    st.metric(
+        "Total de Novos",
+        f"{len(df_novos)} fornecedores",
+        f"{formatar_moeda(df_novos['Valor Total'].sum())} total"
     )
 
-    st.plotly_chart(fig, use_container_width=True)
-    st.caption("Top 10 fornecedores onde levamos mais tempo para pagar (Emissao → Baixa)")
+    # Tabela
+    df_show = df_novos.head(10).copy()
+    df_show['Primeira Compra'] = df_show['Primeira Compra'].dt.strftime('%d/%m/%Y')
+    df_show['Valor Total'] = df_show['Valor Total'].apply(lambda x: formatar_moeda(x, completo=True))
+
+    st.dataframe(
+        df_show[['Fornecedor', 'Primeira Compra', 'Valor Total', 'Qtd']],
+        use_container_width=True,
+        hide_index=True,
+        height=250
+    )
 
 
-def _render_pontualidade_por_fornecedor(df_pagos, cores):
-    """Distribuicao de pontualidade de pagamento"""
+def _render_inativos(df, cores):
+    """Fornecedores inativos (sem compras recentes)"""
 
-    st.markdown("##### Comportamento de Pagamento")
+    st.markdown("##### Fornecedores Inativos")
 
-    if len(df_pagos) == 0 or 'DIAS_ATRASO_PGTO' not in df_pagos.columns:
-        st.info("Sem dados de pagamento")
+    hoje = datetime.now()
+
+    # Encontrar ultima compra de cada fornecedor
+    df_ultima = df.groupby('NOME_FORNECEDOR').agg({
+        'EMISSAO': 'max',
+        'VALOR_ORIGINAL': 'sum',
+        'NUMERO': 'count'
+    }).reset_index()
+    df_ultima.columns = ['Fornecedor', 'Ultima Compra', 'Valor Historico', 'Qtd']
+
+    # Filtros
+    periodo = st.selectbox(
+        "Sem compras ha",
+        ['Mais de 60 dias', 'Mais de 90 dias', 'Mais de 180 dias'],
+        key='inativos_periodo'
+    )
+
+    dias = {'Mais de 60 dias': 60, 'Mais de 90 dias': 90, 'Mais de 180 dias': 180}[periodo]
+    limite = hoje - timedelta(days=dias)
+
+    df_inativos = df_ultima[df_ultima['Ultima Compra'] < limite].copy()
+    df_inativos['Dias Inativo'] = (hoje - df_inativos['Ultima Compra']).dt.days
+    df_inativos = df_inativos.sort_values('Valor Historico', ascending=False)
+
+    if len(df_inativos) == 0:
+        st.success(f"Nenhum fornecedor inativo ha {periodo.lower().replace('mais de ', '')}")
         return
 
-    # Verificar se tem dados de atraso
-    atraso_geral = df_pagos['DIAS_ATRASO_PGTO'].dropna()
-    if len(atraso_geral) == 0:
-        st.warning("Nenhum titulo com data de baixa preenchida")
+    # Metricas
+    st.metric(
+        "Total de Inativos",
+        f"{len(df_inativos)} fornecedores",
+        f"{formatar_moeda(df_inativos['Valor Historico'].sum())} historico"
+    )
+
+    # Tabela
+    df_show = df_inativos.head(10).copy()
+    df_show['Ultima Compra'] = df_show['Ultima Compra'].dt.strftime('%d/%m/%Y')
+    df_show['Valor Historico'] = df_show['Valor Historico'].apply(lambda x: formatar_moeda(x, completo=True))
+
+    st.dataframe(
+        df_show[['Fornecedor', 'Ultima Compra', 'Dias Inativo', 'Valor Historico']],
+        use_container_width=True,
+        hide_index=True,
+        height=250
+    )
+
+
+def _render_matriz_filial_fornecedor(df, cores):
+    """Matriz de relacionamento Filial x Fornecedor"""
+
+    st.markdown("##### Matriz Filial x Fornecedor")
+
+    # Top 10 fornecedores
+    top10_forn = df.groupby('NOME_FORNECEDOR')['VALOR_ORIGINAL'].sum().nlargest(10).index.tolist()
+
+    if len(top10_forn) == 0 or 'NOME_FILIAL' not in df.columns:
+        st.info("Dados insuficientes")
         return
 
-    # Calcular estatisticas gerais
-    total_pagamentos = len(atraso_geral)
-    pagos_no_prazo = (atraso_geral <= 0).sum()
-    pagos_atrasados = (atraso_geral > 0).sum()
-    taxa_pontualidade = pagos_no_prazo / total_pagamentos * 100
-    atraso_medio = atraso_geral[atraso_geral > 0].mean() if pagos_atrasados > 0 else 0
+    # Filtrar e criar pivot
+    df_matriz = df[df['NOME_FORNECEDOR'].isin(top10_forn)].copy()
 
-    # Cards de resumo
-    col1, col2, col3, col4 = st.columns(4)
-    col1.metric("Total Pagamentos", formatar_numero(total_pagamentos))
-    col2.metric("No Prazo", formatar_numero(pagos_no_prazo), f"{taxa_pontualidade:.1f}%")
-    col3.metric("Com Atraso", formatar_numero(pagos_atrasados), f"{100-taxa_pontualidade:.1f}%")
-    col4.metric("Atraso Medio", f"{atraso_medio:.0f} dias" if atraso_medio > 0 else "-")
+    pivot = df_matriz.pivot_table(
+        values='VALOR_ORIGINAL',
+        index='NOME_FILIAL',
+        columns='NOME_FORNECEDOR',
+        aggfunc='sum',
+        fill_value=0
+    )
 
-    # Distribuicao por faixa de atraso
-    def classificar_atraso(dias):
-        if dias <= -7:
-            return "Antecipado (7+ dias)"
-        elif dias < 0:
-            return "Antecipado (1-7 dias)"
-        elif dias == 0:
-            return "No vencimento"
-        elif dias <= 7:
-            return "Atraso 1-7 dias"
-        elif dias <= 15:
-            return "Atraso 8-15 dias"
-        elif dias <= 30:
-            return "Atraso 16-30 dias"
-        else:
-            return "Atraso 30+ dias"
+    if pivot.empty:
+        st.info("Dados insuficientes para matriz")
+        return
 
-    df_dist = pd.DataFrame({'ATRASO': atraso_geral})
-    df_dist['FAIXA'] = df_dist['ATRASO'].apply(classificar_atraso)
-
-    ordem = ["Antecipado (7+ dias)", "Antecipado (1-7 dias)", "No vencimento",
-             "Atraso 1-7 dias", "Atraso 8-15 dias", "Atraso 16-30 dias", "Atraso 30+ dias"]
-
-    df_grp = df_dist.groupby('FAIXA').size().reindex(ordem, fill_value=0).reset_index()
-    df_grp.columns = ['Faixa', 'Qtd']
-    df_grp['Pct'] = df_grp['Qtd'] / total_pagamentos * 100
-
-    # Cores: verde para antecipado/no prazo, amarelo/vermelho para atraso
-    cores_faixas = [
-        cores['sucesso'],      # Antecipado 7+
-        '#84cc16',             # Antecipado 1-7
-        cores['primaria'],     # No vencimento
-        cores['alerta'],       # Atraso 1-7
-        '#f59e0b',             # Atraso 8-15
-        '#f97316',             # Atraso 16-30
-        cores['perigo']        # Atraso 30+
-    ]
-
-    fig = go.Figure(go.Bar(
-        x=df_grp['Faixa'],
-        y=df_grp['Qtd'],
-        marker_color=cores_faixas,
-        text=[f"{int(q)}<br>({p:.1f}%)" for q, p in zip(df_grp['Qtd'], df_grp['Pct'])],
-        textposition='outside',
-        textfont=dict(size=9)
+    # Heatmap
+    fig = go.Figure(data=go.Heatmap(
+        z=pivot.values,
+        x=[f[:20] for f in pivot.columns],
+        y=[f[:25] for f in pivot.index],
+        colorscale=[
+            [0, cores['fundo']],
+            [0.5, cores['info']],
+            [1, cores['primaria']]
+        ],
+        hovertemplate='Filial: %{y}<br>Fornecedor: %{x}<br>Valor: R$ %{z:,.0f}<extra></extra>'
     ))
 
     fig.update_layout(
-        criar_layout(280),
+        criar_layout(400),
         margin=dict(l=10, r=10, t=10, b=80),
-        xaxis_tickangle=-30
-    )
-
-    st.plotly_chart(fig, use_container_width=True)
-    st.caption("Distribuicao de pagamentos por faixa de atraso (DT_BAIXA vs VENCIMENTO)")
-
-
-def _render_matriz_risco(df, df_vencidos, cores):
-    """Matriz de risco: Valor x Atraso"""
-
-    st.markdown("##### Matriz de Risco")
-
-    if len(df_vencidos) == 0:
-        st.success("Nenhum fornecedor com titulos vencidos!")
-        return
-
-    df_risco = df_vencidos.groupby('NOME_FORNECEDOR').agg({
-        'SALDO': 'sum',
-        'DIAS_ATRASO': 'max',
-        'VALOR_ORIGINAL': 'count'
-    }).reset_index()
-    df_risco.columns = ['Fornecedor', 'Valor_Vencido', 'Dias_Atraso', 'Qtd']
-
-    # Classificar risco
-    def classificar_risco(row):
-        if row['Valor_Vencido'] > 100000 and row['Dias_Atraso'] > 30:
-            return 'Critico'
-        elif row['Valor_Vencido'] > 50000 or row['Dias_Atraso'] > 30:
-            return 'Alto'
-        elif row['Dias_Atraso'] > 15:
-            return 'Medio'
-        return 'Baixo'
-
-    df_risco['Risco'] = df_risco.apply(classificar_risco, axis=1)
-
-    cores_risco = {
-        'Critico': cores['perigo'],
-        'Alto': '#f97316',
-        'Medio': cores['alerta'],
-        'Baixo': cores['info']
-    }
-
-    fig = px.scatter(
-        df_risco,
-        x='Dias_Atraso',
-        y='Valor_Vencido',
-        size='Qtd',
-        color='Risco',
-        hover_name='Fornecedor',
-        color_discrete_map=cores_risco,
-        labels={
-            'Dias_Atraso': 'Dias em Atraso',
-            'Valor_Vencido': 'Valor Vencido (R$)',
-            'Qtd': 'Qtd Titulos'
-        }
-    )
-
-    # Linhas de referencia
-    fig.add_hline(y=50000, line_dash="dash", line_color=cores['alerta'], opacity=0.5)
-    fig.add_vline(x=30, line_dash="dash", line_color=cores['alerta'], opacity=0.5)
-
-    fig.update_layout(
-        criar_layout(300),
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="center", x=0.5),
-        margin=dict(l=10, r=10, t=30, b=10)
+        xaxis=dict(tickangle=-45, tickfont=dict(size=8, color=cores['texto'])),
+        yaxis=dict(tickfont=dict(size=9, color=cores['texto']))
     )
 
     st.plotly_chart(fig, use_container_width=True)
 
-    # Resumo
+    # Insights
+    with st.expander("Ver insights da matriz"):
+        # Fornecedor mais concentrado em uma filial
+        for forn in top10_forn[:5]:
+            if forn in pivot.columns:
+                total_forn = pivot[forn].sum()
+                if total_forn > 0:
+                    max_filial = pivot[forn].idxmax()
+                    pct_max = pivot[forn].max() / total_forn * 100
+                    if pct_max > 70:
+                        st.caption(f"⚠️ **{forn[:30]}**: {pct_max:.0f}% concentrado em {max_filial}")
+
+
+def _render_prazos_pagamento(df, cores):
+    """Analise de prazos de pagamento por fornecedor"""
+
+    st.markdown("##### Prazos de Pagamento")
+
+    # Calcular prazo concedido (emissao ate vencimento)
+    df_prazos = df.copy()
+    df_prazos['PRAZO_CONCEDIDO'] = (df_prazos['VENCIMENTO'] - df_prazos['EMISSAO']).dt.days
+
+    # Calcular prazo real (emissao ate pagamento) - apenas para pagos
+    df_pagos = df_prazos[df_prazos['SALDO'] == 0].copy()
+    if 'DT_BAIXA' in df_pagos.columns:
+        df_pagos['PRAZO_REAL'] = (df_pagos['DT_BAIXA'] - df_pagos['EMISSAO']).dt.days
+    else:
+        df_pagos['PRAZO_REAL'] = None
+
+    # KPIs de prazo
+    prazo_medio_concedido = df_prazos['PRAZO_CONCEDIDO'].mean()
+    prazo_medio_real = df_pagos['PRAZO_REAL'].mean() if 'PRAZO_REAL' in df_pagos.columns and len(df_pagos) > 0 else 0
+
     col1, col2, col3, col4 = st.columns(4)
-    for i, (risco, col) in enumerate(zip(['Critico', 'Alto', 'Medio', 'Baixo'], [col1, col2, col3, col4])):
-        qtd = len(df_risco[df_risco['Risco'] == risco])
-        col.metric(risco, qtd)
+
+    with col1:
+        st.metric(
+            label="Prazo Medio Concedido",
+            value=f"{prazo_medio_concedido:.0f} dias" if pd.notna(prazo_medio_concedido) else "N/A",
+            delta="emissao → vencimento",
+            delta_color="off"
+        )
+
+    with col2:
+        st.metric(
+            label="Prazo Medio Real",
+            value=f"{prazo_medio_real:.0f} dias" if pd.notna(prazo_medio_real) and prazo_medio_real > 0 else "N/A",
+            delta="emissao → pagamento",
+            delta_color="off"
+        )
+
+    with col3:
+        diferenca = prazo_medio_real - prazo_medio_concedido if pd.notna(prazo_medio_real) and pd.notna(prazo_medio_concedido) else 0
+        cor_diff = "normal" if diferenca <= 0 else "inverse"
+        st.metric(
+            label="Diferenca Media",
+            value=f"{diferenca:+.0f} dias" if diferenca != 0 else "0 dias",
+            delta="antecipado" if diferenca < 0 else ("atrasado" if diferenca > 0 else "no prazo"),
+            delta_color=cor_diff
+        )
+
+    with col4:
+        # % pagos no prazo
+        if 'PRAZO_REAL' in df_pagos.columns and len(df_pagos) > 0:
+            df_pagos_valid = df_pagos[df_pagos['PRAZO_REAL'].notna() & df_pagos['PRAZO_CONCEDIDO'].notna()]
+            if len(df_pagos_valid) > 0:
+                pct_no_prazo = (df_pagos_valid['PRAZO_REAL'] <= df_pagos_valid['PRAZO_CONCEDIDO']).mean() * 100
+            else:
+                pct_no_prazo = 0
+        else:
+            pct_no_prazo = 0
+        st.metric(
+            label="Pagos no Prazo",
+            value=f"{pct_no_prazo:.0f}%",
+            delta=f"{len(df_pagos)} titulos pagos",
+            delta_color="off"
+        )
+
+    # Graficos lado a lado
+    col1, col2 = st.columns(2)
+
+    with col1:
+        st.markdown("###### Fornecedores que dao mais prazo")
+
+        # Agrupar por fornecedor - prazo concedido
+        df_forn_prazo = df_prazos.groupby('NOME_FORNECEDOR').agg({
+            'PRAZO_CONCEDIDO': 'mean',
+            'VALOR_ORIGINAL': 'sum',
+            'NUMERO': 'count'
+        }).reset_index()
+        df_forn_prazo.columns = ['Fornecedor', 'Prazo', 'Valor', 'Qtd']
+
+        # Filtrar fornecedores com pelo menos 3 titulos
+        df_forn_prazo = df_forn_prazo[df_forn_prazo['Qtd'] >= 3]
+
+        # Top 10 mais prazo
+        df_mais_prazo = df_forn_prazo.nlargest(10, 'Prazo')
+        df_mais_prazo = df_mais_prazo.sort_values('Prazo', ascending=True)
+
+        if len(df_mais_prazo) > 0:
+            fig = go.Figure()
+
+            fig.add_trace(go.Bar(
+                y=df_mais_prazo['Fornecedor'].str[:30],
+                x=df_mais_prazo['Prazo'],
+                orientation='h',
+                marker_color=cores['sucesso'],
+                text=[f"{int(p)} dias" for p in df_mais_prazo['Prazo']],
+                textposition='outside',
+                textfont=dict(size=9, color=cores['texto'])
+            ))
+
+            fig.update_layout(
+                criar_layout(280),
+                margin=dict(l=10, r=60, t=10, b=10),
+                xaxis=dict(showticklabels=False, showgrid=False),
+                yaxis=dict(tickfont=dict(size=9, color=cores['texto']))
+            )
+
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.info("Dados insuficientes")
+
+    with col2:
+        st.markdown("###### Fornecedores que dao menos prazo")
+
+        # Top 10 menos prazo (excluir prazos negativos ou zero)
+        df_menos_prazo = df_forn_prazo[df_forn_prazo['Prazo'] > 0].nsmallest(10, 'Prazo')
+        df_menos_prazo = df_menos_prazo.sort_values('Prazo', ascending=True)
+
+        if len(df_menos_prazo) > 0:
+            fig = go.Figure()
+
+            fig.add_trace(go.Bar(
+                y=df_menos_prazo['Fornecedor'].str[:30],
+                x=df_menos_prazo['Prazo'],
+                orientation='h',
+                marker_color=cores['perigo'],
+                text=[f"{int(p)} dias" for p in df_menos_prazo['Prazo']],
+                textposition='outside',
+                textfont=dict(size=9, color=cores['texto'])
+            ))
+
+            fig.update_layout(
+                criar_layout(280),
+                margin=dict(l=10, r=60, t=10, b=10),
+                xaxis=dict(showticklabels=False, showgrid=False),
+                yaxis=dict(tickfont=dict(size=9, color=cores['texto']))
+            )
+
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.info("Dados insuficientes")
+
+    # Tabela comparativa
+    with st.expander("Ver detalhes por fornecedor"):
+        df_detalhe = df_prazos.copy()
+
+        # Adicionar prazo real
+        if 'DT_BAIXA' in df_detalhe.columns:
+            df_detalhe['PRAZO_REAL'] = (df_detalhe['DT_BAIXA'] - df_detalhe['EMISSAO']).dt.days
+
+        df_detalhe_grp = df_detalhe.groupby('NOME_FORNECEDOR').agg({
+            'PRAZO_CONCEDIDO': 'mean',
+            'VALOR_ORIGINAL': 'sum',
+            'SALDO': 'sum',
+            'NUMERO': 'count'
+        }).reset_index()
+
+        # Adicionar prazo real medio (apenas dos pagos)
+        if 'PRAZO_REAL' in df_detalhe.columns:
+            prazo_real_grp = df_detalhe[df_detalhe['SALDO'] == 0].groupby('NOME_FORNECEDOR')['PRAZO_REAL'].mean()
+            df_detalhe_grp = df_detalhe_grp.merge(
+                prazo_real_grp.reset_index().rename(columns={'PRAZO_REAL': 'Prazo Real'}),
+                on='NOME_FORNECEDOR',
+                how='left'
+            )
+        else:
+            df_detalhe_grp['Prazo Real'] = None
+
+        df_detalhe_grp.columns = ['Fornecedor', 'Prazo Concedido', 'Valor Total', 'Saldo', 'Qtd', 'Prazo Real']
+        df_detalhe_grp['Diferenca'] = df_detalhe_grp['Prazo Real'] - df_detalhe_grp['Prazo Concedido']
+
+        # Formatar
+        df_show = df_detalhe_grp.copy()
+        df_show['Prazo Concedido'] = df_show['Prazo Concedido'].apply(lambda x: f"{x:.0f} dias" if pd.notna(x) else "-")
+        df_show['Prazo Real'] = df_show['Prazo Real'].apply(lambda x: f"{x:.0f} dias" if pd.notna(x) else "-")
+        df_show['Diferenca'] = df_show['Diferenca'].apply(lambda x: f"{x:+.0f} dias" if pd.notna(x) else "-")
+        df_show['Valor Total'] = df_show['Valor Total'].apply(lambda x: formatar_moeda(x, completo=True))
+        df_show['Saldo'] = df_show['Saldo'].apply(lambda x: formatar_moeda(x, completo=True))
+
+        df_show = df_show.sort_values('Qtd', ascending=False).head(50)
+
+        st.dataframe(
+            df_show[['Fornecedor', 'Prazo Concedido', 'Prazo Real', 'Diferenca', 'Valor Total', 'Qtd']],
+            use_container_width=True,
+            hide_index=True,
+            height=300
+        )
 
 
 def _render_curva_abc(df, cores):
@@ -626,54 +739,241 @@ def _render_curva_abc(df, cores):
         lambda x: 'A' if x <= 80 else ('B' if x <= 95 else 'C')
     )
 
+    # Estatisticas
+    qtd_a = len(df_abc[df_abc['CLASSE'] == 'A'])
+    qtd_b = len(df_abc[df_abc['CLASSE'] == 'B'])
+    qtd_c = len(df_abc[df_abc['CLASSE'] == 'C'])
+
     fig = go.Figure()
 
-    cores_abc = {'A': cores['primaria'], 'B': cores['alerta'], 'C': cores['info']}
+    cores_abc = {'A': cores['primaria'], 'B': cores['alerta'], 'C': cores['texto_secundario']}
+
+    # Barras (top 25)
+    df_show = df_abc.head(25)
     fig.add_trace(go.Bar(
-        x=df_abc['RANK'][:30],
-        y=df_abc['VALOR_ORIGINAL'][:30],
+        x=df_show['RANK'],
+        y=df_show['VALOR_ORIGINAL'],
         name='Valor',
-        marker_color=[cores_abc[c] for c in df_abc['CLASSE'][:30]]
+        marker_color=[cores_abc[c] for c in df_show['CLASSE']]
     ))
 
+    # Linha % acumulado
     fig.add_trace(go.Scatter(
-        x=df_abc['RANK'][:30],
-        y=df_abc['PCT_ACUM'][:30],
+        x=df_show['RANK'],
+        y=df_show['PCT_ACUM'],
         name='% Acumulado',
         mode='lines+markers',
         line=dict(color=cores['texto'], width=2),
+        marker=dict(size=4),
         yaxis='y2'
     ))
 
-    fig.add_hline(y=80, line_dash="dash", line_color=cores['sucesso'], yref='y2')
-    fig.add_hline(y=95, line_dash="dash", line_color=cores['alerta'], yref='y2')
+    # Linhas de referencia
+    fig.add_hline(y=80, line_dash="dash", line_color=cores['sucesso'], line_width=1, yref='y2')
+    fig.add_hline(y=95, line_dash="dash", line_color=cores['alerta'], line_width=1, yref='y2')
 
     fig.update_layout(
-        criar_layout(300),
-        yaxis2=dict(overlaying='y', side='right', range=[0, 105], showgrid=False),
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+        criar_layout(280),
+        yaxis=dict(showticklabels=False, showgrid=False),
+        yaxis2=dict(overlaying='y', side='right', range=[0, 105], showgrid=False,
+                    tickfont=dict(size=9, color=cores['texto'])),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1,
+                    font=dict(size=9, color=cores['texto'])),
         margin=dict(l=10, r=40, t=30, b=30),
-        xaxis_title="Rank"
+        xaxis=dict(title='Rank', tickfont=dict(size=9, color=cores['texto']))
     )
 
     st.plotly_chart(fig, use_container_width=True)
 
     # Resumo
     col1, col2, col3 = st.columns(3)
-    qtd_a = len(df_abc[df_abc['CLASSE'] == 'A'])
-    qtd_b = len(df_abc[df_abc['CLASSE'] == 'B'])
-    qtd_c = len(df_abc[df_abc['CLASSE'] == 'C'])
-    col1.success(f"**A**: {qtd_a} (80%)")
-    col2.warning(f"**B**: {qtd_b} (15%)")
-    col3.info(f"**C**: {qtd_c} (5%)")
+    col1.markdown(f"**A (80%):** {qtd_a} forn.")
+    col2.markdown(f"**B (15%):** {qtd_b} forn.")
+    col3.markdown(f"**C (5%):** {qtd_c} forn.")
 
 
-def _render_busca_fornecedor(df, df_pendentes, df_pagos, cores):
-    """Busca e detalhes de fornecedor"""
+def _render_concentracao(df, cores):
+    """Analise de concentracao de fornecedores"""
+
+    st.markdown("##### Concentracao")
+
+    total = df['VALOR_ORIGINAL'].sum()
+    df_forn = df.groupby('NOME_FORNECEDOR')['VALOR_ORIGINAL'].sum().sort_values(ascending=False)
+
+    # Calcular concentracao em diferentes niveis
+    concentracoes = []
+    for n in [1, 5, 10, 20, 50]:
+        if n <= len(df_forn):
+            valor_top = df_forn.head(n).sum()
+            pct = valor_top / total * 100
+            concentracoes.append({'Top': f'Top {n}', 'Valor': valor_top, 'Pct': pct, 'N': n})
+
+    df_conc = pd.DataFrame(concentracoes)
+
+    # Grafico de barras
+    fig = go.Figure()
+
+    fig.add_trace(go.Bar(
+        x=df_conc['Top'],
+        y=df_conc['Pct'],
+        marker_color=[cores['perigo'], cores['alerta'], '#f97316', cores['info'], cores['sucesso']][:len(df_conc)],
+        text=[f"{p:.1f}%" for p in df_conc['Pct']],
+        textposition='outside',
+        textfont=dict(size=11, color=cores['texto'])
+    ))
+
+    fig.update_layout(
+        criar_layout(280),
+        margin=dict(l=10, r=10, t=10, b=10),
+        xaxis=dict(tickfont=dict(size=10, color=cores['texto'])),
+        yaxis=dict(showticklabels=False, showgrid=False, range=[0, 110])
+    )
+
+    st.plotly_chart(fig, use_container_width=True)
+
+    # Detalhes
+    st.markdown("**Maiores fornecedores:**")
+    for i, (forn, valor) in enumerate(df_forn.head(5).items()):
+        pct = valor / total * 100
+        st.caption(f"{i+1}. {forn[:40]} - {formatar_moeda(valor)} ({pct:.1f}%)")
+
+
+def _render_por_categoria(df, cores):
+    """Valores por categoria (DESCRICAO) - Pago vs Pendente"""
+
+    st.markdown("##### Por Categoria")
+
+    if 'DESCRICAO' not in df.columns:
+        st.info("Sem dados de categoria")
+        return
+
+    # Agrupar por categoria
+    df_cat = df.groupby('DESCRICAO').agg({
+        'VALOR_ORIGINAL': 'sum',
+        'SALDO': 'sum',
+        'NOME_FORNECEDOR': 'nunique'
+    }).reset_index()
+    df_cat.columns = ['Categoria', 'Total', 'Pendente', 'Fornecedores']
+    df_cat['Pago'] = df_cat['Total'] - df_cat['Pendente']
+
+    # Top 12
+    df_top = df_cat.nlargest(12, 'Total')
+    df_top = df_top.sort_values('Total', ascending=True)
+
+    col1, col2 = st.columns([2, 1])
+
+    with col1:
+        fig = go.Figure()
+
+        # Pago
+        fig.add_trace(go.Bar(
+            y=df_top['Categoria'].str[:30],
+            x=df_top['Pago'],
+            orientation='h',
+            name='Pago',
+            marker_color=cores['sucesso'],
+            text=[formatar_moeda(v) if v > 0 else '' for v in df_top['Pago']],
+            textposition='inside',
+            textfont=dict(size=8, color='white')
+        ))
+
+        # Pendente
+        fig.add_trace(go.Bar(
+            y=df_top['Categoria'].str[:30],
+            x=df_top['Pendente'],
+            orientation='h',
+            name='Pendente',
+            marker_color=cores['alerta'],
+            text=[formatar_moeda(v) if v > 0 else '' for v in df_top['Pendente']],
+            textposition='inside',
+            textfont=dict(size=8, color='white')
+        ))
+
+        fig.update_layout(
+            criar_layout(380),
+            barmode='stack',
+            margin=dict(l=10, r=10, t=10, b=10),
+            xaxis=dict(showticklabels=False, showgrid=False),
+            yaxis=dict(tickfont=dict(size=9, color=cores['texto'])),
+            legend=dict(
+                orientation='h',
+                yanchor='bottom',
+                y=1.02,
+                xanchor='right',
+                x=1,
+                font=dict(size=10, color=cores['texto'])
+            )
+        )
+
+        st.plotly_chart(fig, use_container_width=True)
+
+    with col2:
+        st.markdown("**Top 5 categorias:**")
+        for _, row in df_top.tail(5).iloc[::-1].iterrows():
+            pct_pago = (row['Pago'] / row['Total'] * 100) if row['Total'] > 0 else 0
+            st.markdown(f"""
+            <div style="background: {cores['card']}; border: 1px solid {cores['borda']};
+                        border-radius: 8px; padding: 0.5rem; margin-bottom: 0.5rem;">
+                <p style="color: {cores['texto']}; font-size: 0.8rem; font-weight: 600; margin: 0;">
+                    {row['Categoria'][:25]}</p>
+                <p style="color: {cores['texto_secundario']}; font-size: 0.7rem; margin: 0;">
+                    {int(row['Fornecedores'])} fornecedores</p>
+                <p style="color: {cores['texto']}; font-size: 0.75rem; margin: 0;">
+                    Total: {formatar_moeda(row['Total'])}</p>
+                <p style="color: {cores['sucesso']}; font-size: 0.7rem; margin: 0;">
+                    {pct_pago:.0f}% pago</p>
+            </div>
+            """, unsafe_allow_html=True)
+
+
+def _render_top_pendentes(df, cores):
+    """Top fornecedores com maior saldo pendente"""
+
+    st.markdown("##### Top 15 - Maior Saldo Pendente")
+
+    # Filtrar apenas com saldo pendente
+    df_pend = df[df['SALDO'] > 0].copy()
+
+    if len(df_pend) == 0:
+        st.success("Nenhum fornecedor com saldo pendente!")
+        return
+
+    df_forn = df_pend.groupby('NOME_FORNECEDOR').agg({
+        'SALDO': 'sum',
+        'NUMERO': 'count'
+    }).reset_index()
+    df_forn.columns = ['Fornecedor', 'Pendente', 'Qtd']
+    df_forn = df_forn.nlargest(15, 'Pendente')
+    df_forn = df_forn.sort_values('Pendente', ascending=True)
+
+    fig = go.Figure()
+
+    fig.add_trace(go.Bar(
+        y=df_forn['Fornecedor'].str[:35],
+        x=df_forn['Pendente'],
+        orientation='h',
+        marker_color=cores['alerta'],
+        text=[f"{formatar_moeda(v)} ({int(q)} tit.)" for v, q in zip(df_forn['Pendente'], df_forn['Qtd'])],
+        textposition='outside',
+        textfont=dict(size=9, color=cores['texto'])
+    ))
+
+    fig.update_layout(
+        criar_layout(420),
+        margin=dict(l=10, r=120, t=10, b=10),
+        xaxis=dict(showticklabels=False, showgrid=False),
+        yaxis=dict(tickfont=dict(size=10, color=cores['texto']))
+    )
+
+    st.plotly_chart(fig, use_container_width=True)
+
+
+def _render_consulta_fornecedor(df, cores):
+    """Consulta detalhada de fornecedor"""
 
     st.markdown("##### Consultar Fornecedor")
 
-    fornecedores = sorted(df['NOME_FORNECEDOR'].unique().tolist())
+    fornecedores = sorted([str(x) for x in df['NOME_FORNECEDOR'].unique().tolist()])
 
     fornecedor_selecionado = st.selectbox(
         "Selecione um fornecedor",
@@ -682,81 +982,34 @@ def _render_busca_fornecedor(df, df_pendentes, df_pagos, cores):
     )
 
     if not fornecedor_selecionado:
+        st.info("Selecione um fornecedor para ver detalhes")
         return
 
     df_forn = df[df['NOME_FORNECEDOR'] == fornecedor_selecionado]
-    df_pend_forn = df_pendentes[df_pendentes['NOME_FORNECEDOR'] == fornecedor_selecionado]
-    df_pago_forn = df_pagos[df_pagos['NOME_FORNECEDOR'] == fornecedor_selecionado]
 
-    # Calcular metricas
+    # Metricas
     total_valor = df_forn['VALOR_ORIGINAL'].sum()
     total_pendente = df_forn['SALDO'].sum()
     total_pago = total_valor - total_pendente
     qtd_titulos = len(df_forn)
+    pct_pago = (total_pago / total_valor * 100) if total_valor > 0 else 0
 
-    # Vencidos
-    vencidos = df_pend_forn[df_pend_forn['STATUS'] == 'Vencido']
-    total_vencido = vencidos['SALDO'].sum() if len(vencidos) > 0 else 0
-    dias_atraso_max = vencidos['DIAS_ATRASO'].max() if len(vencidos) > 0 else 0
-
-    # Prazo e pontualidade
-    prazo_medio = 0
-    taxa_pontual = 0
-    if len(df_pago_forn) > 0:
-        if 'DIAS_PARA_PAGAR' in df_pago_forn.columns:
-            prazo = df_pago_forn['DIAS_PARA_PAGAR'].dropna()
-            if len(prazo) > 0:
-                prazo_medio = prazo.mean()
-
-        if 'DIAS_ATRASO_PGTO' in df_pago_forn.columns:
-            atraso = df_pago_forn['DIAS_ATRASO_PGTO'].dropna()
-            if len(atraso) > 0:
-                taxa_pontual = (atraso <= 0).sum() / len(atraso) * 100
-
-    # Linha 1: Metricas financeiras
+    # Cards
     col1, col2, col3, col4 = st.columns(4)
     col1.metric("Valor Total", formatar_moeda(total_valor), f"{qtd_titulos} titulos")
-    col2.metric("Pago", formatar_moeda(total_pago))
+    col2.metric("Pago", formatar_moeda(total_pago), f"{pct_pago:.1f}%")
     col3.metric("Pendente", formatar_moeda(total_pendente))
-    col4.metric("Vencido", formatar_moeda(total_vencido), f"{int(dias_atraso_max)}d atraso" if dias_atraso_max > 0 else "Em dia")
 
-    # Linha 2: Metricas de comportamento
-    col1, col2, col3, col4 = st.columns(4)
-    col1.metric("Prazo Medio Pgto", f"{prazo_medio:.0f} dias")
-    col2.metric("Taxa Pontualidade", f"{taxa_pontual:.1f}%")
+    # Categorias do fornecedor
+    if 'DESCRICAO' in df_forn.columns:
+        cats = df_forn.groupby('DESCRICAO')['VALOR_ORIGINAL'].sum().nlargest(3)
+        cats_str = ", ".join([f"{c[:15]}" for c in cats.index])
+        col4.metric("Principais Categorias", cats_str[:30])
 
-    pct_pago = (total_pago / total_valor * 100) if total_valor > 0 else 0
-    col3.metric("% Pago", f"{pct_pago:.1f}%")
-
-    # Classificar fornecedor
-    if taxa_pontual >= 80 and prazo_medio <= 45:
-        status = "Excelente"
-        cor_status = "success"
-    elif taxa_pontual >= 60:
-        status = "Bom"
-        cor_status = "info"
-    elif taxa_pontual >= 40:
-        status = "Regular"
-        cor_status = "warning"
-    else:
-        status = "Atencao"
-        cor_status = "error"
-
-    with col4:
-        if cor_status == "success":
-            st.success(f"**{status}**")
-        elif cor_status == "info":
-            st.info(f"**{status}**")
-        elif cor_status == "warning":
-            st.warning(f"**{status}**")
-        else:
-            st.error(f"**{status}**")
-
-    # Tabs de detalhes
-    tab1, tab2 = st.tabs(["Historico", "Titulos"])
+    # Tabs
+    tab1, tab2 = st.tabs(["Evolucao", "Titulos"])
 
     with tab1:
-        # Grafico de evolucao
         df_hist = df_forn.copy()
         df_hist['MES'] = df_hist['EMISSAO'].dt.to_period('M').astype(str)
         df_hist_grp = df_hist.groupby('MES').agg({
@@ -767,20 +1020,36 @@ def _render_busca_fornecedor(df, df_pendentes, df_pagos, cores):
 
         if len(df_hist_grp) > 1:
             fig = go.Figure()
-            fig.add_trace(go.Bar(x=df_hist_grp['MES'], y=df_hist_grp['PAGO'], name='Pago', marker_color=cores['sucesso']))
-            fig.add_trace(go.Bar(x=df_hist_grp['MES'], y=df_hist_grp['SALDO'], name='Pendente', marker_color=cores['alerta']))
-            fig.update_layout(criar_layout(200, barmode='stack'), margin=dict(l=10, r=10, t=10, b=30))
+            fig.add_trace(go.Bar(
+                x=df_hist_grp['MES'],
+                y=df_hist_grp['PAGO'],
+                name='Pago',
+                marker_color=cores['sucesso']
+            ))
+            fig.add_trace(go.Bar(
+                x=df_hist_grp['MES'],
+                y=df_hist_grp['SALDO'],
+                name='Pendente',
+                marker_color=cores['alerta']
+            ))
+            fig.update_layout(
+                criar_layout(200),
+                barmode='stack',
+                margin=dict(l=10, r=10, t=10, b=40),
+                xaxis=dict(tickangle=-45, tickfont=dict(size=9)),
+                yaxis=dict(showticklabels=False),
+                legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='right', x=1)
+            )
             st.plotly_chart(fig, use_container_width=True)
         else:
-            st.info("Historico insuficiente")
+            st.info("Historico insuficiente para grafico")
 
     with tab2:
-        # Tabela de titulos
-        colunas = ['NOME_FILIAL', 'EMISSAO', 'VENCIMENTO', 'DT_BAIXA', 'DIAS_PARA_PAGAR', 'DIAS_ATRASO_PGTO', 'VALOR_ORIGINAL', 'SALDO', 'STATUS']
+        colunas = ['NOME_FILIAL', 'DESCRICAO', 'EMISSAO', 'VENCIMENTO', 'VALOR_ORIGINAL', 'SALDO']
         colunas_disp = [c for c in colunas if c in df_forn.columns]
         df_tab = df_forn[colunas_disp].copy()
 
-        for col in ['EMISSAO', 'VENCIMENTO', 'DT_BAIXA']:
+        for col in ['EMISSAO', 'VENCIMENTO']:
             if col in df_tab.columns:
                 df_tab[col] = pd.to_datetime(df_tab[col], errors='coerce').dt.strftime('%d/%m/%Y')
                 df_tab[col] = df_tab[col].fillna('-')
@@ -788,92 +1057,49 @@ def _render_busca_fornecedor(df, df_pendentes, df_pagos, cores):
         df_tab['VALOR_ORIGINAL'] = df_tab['VALOR_ORIGINAL'].apply(lambda x: formatar_moeda(x, completo=True))
         df_tab['SALDO'] = df_tab['SALDO'].apply(lambda x: formatar_moeda(x, completo=True))
 
-        if 'DIAS_PARA_PAGAR' in df_tab.columns:
-            df_tab['DIAS_PARA_PAGAR'] = df_tab['DIAS_PARA_PAGAR'].apply(lambda x: f"{int(x)}d" if pd.notna(x) else '-')
-
-        if 'DIAS_ATRASO_PGTO' in df_tab.columns:
-            def fmt_atraso(d):
-                if pd.isna(d):
-                    return '-'
-                d = int(d)
-                if d < 0:
-                    return f"{abs(d)}d antec."
-                elif d == 0:
-                    return "No prazo"
-                return f"{d}d atras."
-            df_tab['DIAS_ATRASO_PGTO'] = df_tab['DIAS_ATRASO_PGTO'].apply(fmt_atraso)
-
         nomes = {
             'NOME_FILIAL': 'Filial',
+            'DESCRICAO': 'Categoria',
             'EMISSAO': 'Emissao',
             'VENCIMENTO': 'Vencimento',
-            'DT_BAIXA': 'Dt Pagto',
-            'DIAS_PARA_PAGAR': 'Dias p/ Pagar',
-            'DIAS_ATRASO_PGTO': 'Pgto vs Venc',
             'VALOR_ORIGINAL': 'Valor',
-            'SALDO': 'Saldo',
-            'STATUS': 'Status'
+            'SALDO': 'Saldo'
         }
         df_tab.columns = [nomes.get(c, c) for c in df_tab.columns]
 
         st.dataframe(df_tab, use_container_width=True, hide_index=True, height=300)
 
 
-def _render_ranking(df, df_pagos, cores):
-    """Ranking completo de fornecedores"""
+def _render_ranking(df, cores):
+    """Ranking de fornecedores"""
 
     st.markdown("##### Ranking de Fornecedores")
 
     # Filtros
     col1, col2, col3 = st.columns(3)
+
     with col1:
         ordenar = st.selectbox(
             "Ordenar por",
-            ["Valor Total", "Saldo Pendente", "Prazo Medio", "Pontualidade"],
+            ["Valor Total", "Valor Pago", "Saldo Pendente"],
             key="rank_ordem"
         )
+
     with col2:
         qtd_exibir = st.selectbox("Exibir", [20, 50, 100], key="rank_qtd")
+
     with col3:
         filtro = st.selectbox("Filtrar", ["Todos", "Com Pendencia", "Quitados"], key="rank_filtro")
 
-    # Preparar dados base
+    # Preparar dados
     df_rank = df.groupby('NOME_FORNECEDOR').agg({
         'VALOR_ORIGINAL': 'sum',
         'SALDO': 'sum',
-        'FORNECEDOR': 'count'
+        'NUMERO': 'count'
     }).reset_index()
     df_rank.columns = ['Fornecedor', 'Total', 'Pendente', 'Titulos']
-
-    # Adicionar metricas de pagamento
-    if len(df_pagos) > 0:
-        def calc_metricas(forn):
-            df_f = df_pagos[df_pagos['NOME_FORNECEDOR'] == forn]
-            if len(df_f) == 0:
-                return pd.Series({'Prazo': None, 'Pontualidade': None})
-
-            prazo = None
-            pont = None
-
-            if 'DIAS_PARA_PAGAR' in df_f.columns:
-                p = df_f['DIAS_PARA_PAGAR'].dropna()
-                if len(p) > 0:
-                    prazo = p.mean()
-
-            if 'DIAS_ATRASO_PGTO' in df_f.columns:
-                a = df_f['DIAS_ATRASO_PGTO'].dropna()
-                if len(a) > 0:
-                    pont = (a <= 0).sum() / len(a) * 100
-
-            return pd.Series({'Prazo': prazo, 'Pontualidade': pont})
-
-        metricas = df_rank['Fornecedor'].apply(calc_metricas)
-        df_rank = pd.concat([df_rank, metricas], axis=1)
-    else:
-        df_rank['Prazo'] = None
-        df_rank['Pontualidade'] = None
-
-    df_rank['% Pago'] = ((df_rank['Total'] - df_rank['Pendente']) / df_rank['Total'] * 100).round(1)
+    df_rank['Pago'] = df_rank['Total'] - df_rank['Pendente']
+    df_rank['% Pago'] = ((df_rank['Pago']) / df_rank['Total'] * 100).round(1)
 
     # Filtrar
     if filtro == "Com Pendencia":
@@ -884,21 +1110,20 @@ def _render_ranking(df, df_pagos, cores):
     # Ordenar
     if ordenar == "Valor Total":
         df_rank = df_rank.sort_values('Total', ascending=False)
-    elif ordenar == "Saldo Pendente":
-        df_rank = df_rank.sort_values('Pendente', ascending=False)
-    elif ordenar == "Prazo Medio":
-        df_rank = df_rank.sort_values('Prazo', ascending=False, na_position='last')
+    elif ordenar == "Valor Pago":
+        df_rank = df_rank.sort_values('Pago', ascending=False)
     else:
-        df_rank = df_rank.sort_values('Pontualidade', ascending=True, na_position='last')
+        df_rank = df_rank.sort_values('Pendente', ascending=False)
 
     df_rank = df_rank.head(qtd_exibir)
 
-    # Formatar para exibicao
+    # Formatar
     df_show = df_rank.copy()
     df_show['Total'] = df_show['Total'].apply(lambda x: formatar_moeda(x, completo=True))
+    df_show['Pago'] = df_show['Pago'].apply(lambda x: formatar_moeda(x, completo=True))
     df_show['Pendente'] = df_show['Pendente'].apply(lambda x: formatar_moeda(x, completo=True))
-    df_show['Prazo'] = df_show['Prazo'].apply(lambda x: f"{x:.0f}d" if pd.notna(x) else '-')
-    df_show['Pontualidade'] = df_show['Pontualidade'].apply(lambda x: f"{x:.0f}%" if pd.notna(x) else '-')
+
+    df_show = df_show[['Fornecedor', 'Total', 'Pago', 'Pendente', 'Titulos', '% Pago']]
 
     st.dataframe(
         df_show,

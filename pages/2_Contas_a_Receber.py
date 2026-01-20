@@ -3,6 +3,7 @@ Pagina Contas a Receber
 Dashboard Financeiro - Grupo Progresso
 """
 import streamlit as st
+import pandas as pd
 import warnings
 warnings.filterwarnings('ignore')
 
@@ -34,7 +35,6 @@ from tabs_receber.visao_geral import render_visao_geral_receber
 from tabs_receber.vencimentos import render_vencimentos_receber
 from tabs_receber.clientes import render_clientes
 from tabs_receber.categorias import render_categorias_receber
-from tabs_receber.tipo_documento import render_tipo_documento
 from tabs_receber.concentracao_risco import render_concentracao_risco
 from tabs_receber.inadimplencia import render_inadimplencia
 from tabs_receber.adiantamentos import render_adiantamentos_receber
@@ -53,10 +53,6 @@ def fragment_clientes(df):
 @st.fragment
 def fragment_categorias(df):
     render_categorias_receber(df)
-
-@st.fragment
-def fragment_tipo_documento(df):
-    render_tipo_documento(df)
 
 @st.fragment
 def fragment_concentracao_risco(df):
@@ -79,24 +75,69 @@ def main():
     cores = get_cores()
     st.markdown(get_css(), unsafe_allow_html=True)
 
-    # Navbar com filtros de tempo
-    datas_navbar = render_navbar(pagina_atual='receber', mostrar_filtro_tempo=True)
+    # Carregar dados PRIMEIRO para obter opcoes de filiais
+    df_contas_raw, df_adiant_raw, df_baixas_raw = carregar_dados_receber()
 
-    # Carregar dados
-    df_contas_raw, df_adiant, df_baixas = carregar_dados_receber()
-
-    # Excluir clientes Intercompany dos dados principais (igual ao Contas a Pagar)
-    mask_intercompany = df_contas_raw['NOME_CLIENTE'].str.upper().str.contains(
+    # Excluir clientes Intercompany dos dados principais
+    # Em Contas a Receber, intercompany ocorre quando:
+    # - NOME_CLIENTE contem um padrao de empresa do grupo (uma filial pagando para outra)
+    # - Ou NOME_FILIAL contem um padrao E NOME_CLIENTE tambem (transacao entre filiais)
+    mask_cliente_ic = df_contas_raw['NOME_CLIENTE'].str.upper().str.contains(
         '|'.join(INTERCOMPANY_PATTERNS), na=False, regex=True
     )
-    df_contas = df_contas_raw[~mask_intercompany].copy()
+    # Tambem verificar se a filial que recebe E o cliente sao ambos do grupo
+    mask_filial_ic = pd.Series(False, index=df_contas_raw.index)
+    if 'NOME_FILIAL' in df_contas_raw.columns:
+        mask_filial_ic = df_contas_raw['NOME_FILIAL'].str.upper().str.contains(
+            '|'.join(INTERCOMPANY_PATTERNS), na=False, regex=True
+        )
+    # Intercompany = cliente eh do grupo (independente da filial)
+    mask_intercompany = mask_cliente_ic
+    df_sem_ic = df_contas_raw[~mask_intercompany].copy()
+
+    # Excluir intercompany dos adiantamentos e baixas
+    # NOTA: Cada DataFrame tem coluna diferente:
+    # - df_adiant: usa NOME_FORNECEDOR (quem paga/deve)
+    # - df_baixas: usa NOME_CLIENTE
+    df_adiant = df_adiant_raw.copy()
+    df_baixas = df_baixas_raw.copy()
+
+    # Adiantamentos: filtrar por NOME_FORNECEDOR
+    if len(df_adiant) > 0 and 'NOME_FORNECEDOR' in df_adiant.columns:
+        mask_ic_adiant = df_adiant['NOME_FORNECEDOR'].str.upper().str.contains(
+            '|'.join(INTERCOMPANY_PATTERNS), na=False, regex=True
+        )
+        df_adiant = df_adiant[~mask_ic_adiant].copy()
+
+    # Baixas: filtrar por NOME_CLIENTE
+    if len(df_baixas) > 0 and 'NOME_CLIENTE' in df_baixas.columns:
+        mask_ic_baixas = df_baixas['NOME_CLIENTE'].str.upper().str.contains(
+            '|'.join(INTERCOMPANY_PATTERNS), na=False, regex=True
+        )
+        df_baixas = df_baixas[~mask_ic_baixas].copy()
+
+    # Excluir adiantamentos das outras abas - ficam apenas na aba Adiantamentos
+    # 1. Por TIPO (RA, PA, AD, ADTO)
+    tipos_adiantamento = ['RA', 'PA', 'AD', 'ADTO']
+    mask_tipo_adto = df_sem_ic['TIPO'].isin(tipos_adiantamento)
+    # 2. Por DESCRICAO (ADIANTAMENTO, ADT, ADTO)
+    mask_desc_adto = df_sem_ic['DESCRICAO'].str.upper().str.contains('ADIANTAMENTO|ADT |ADTO', na=False, regex=True)
+    # Combinar as duas máscaras
+    mask_adiantamento = mask_tipo_adto | mask_desc_adto
+    df_contas = df_sem_ic[~mask_adiantamento].copy()
 
     filiais_opcoes, categorias_opcoes = get_opcoes_filtros_receber(df_contas)
 
+    # Navbar com filtros de tempo E FILIAL
+    navbar_result = render_navbar(pagina_atual='receber', mostrar_filtro_tempo=True, filiais_opcoes=filiais_opcoes)
+
     hoje = datetime.now()
 
-    # Datas do filtro da navbar
-    data_inicio, data_fim = datas_navbar if datas_navbar else (datetime(2000, 1, 1).date(), hoje.date())
+    # Datas do filtro da navbar (3 valores: data_inicio, data_fim, filtro_filial)
+    if navbar_result:
+        data_inicio, data_fim, filtro_filial = navbar_result
+    else:
+        data_inicio, data_fim, filtro_filial = datetime(2000, 1, 1).date(), hoje.date(), 'Todas as Filiais'
 
     # Apenas ajustar data_inicio ao minimo dos dados (nao limitar data_fim)
     data_min = df_contas['EMISSAO'].min().date()
@@ -118,10 +159,8 @@ def main():
 
         st.divider()
 
-        # Filtros
+        # Filtros (Filial agora esta na navbar)
         st.markdown(f"<p style='color: {cores['texto']}; font-size: 0.8rem; font-weight: 600; margin-bottom: 0.5rem;'>Filtros</p>", unsafe_allow_html=True)
-
-        filtro_filial = st.selectbox("Filial", filiais_opcoes, key="rec_filial")
 
         status_opcoes = ['Todos os Status', 'Vencido', 'Vence em 7 dias', 'Vence em 15 dias', 'Vence em 30 dias', 'Recebido']
         filtro_status = st.selectbox("Status", status_opcoes, key="rec_status")
@@ -204,10 +243,10 @@ def main():
         cor=cores['sucesso']
     )
 
-    # Tabs (9 tabs) - Estrutura otimizada para dados de Receber
-    tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9 = st.tabs([
+    # Tabs (8 tabs) - Estrutura otimizada para dados de Receber
+    tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
         "Visao Geral", "Vencimentos", "Clientes", "Categorias",
-        "Tipo Documento", "Concentracao", "Inadimplencia", "Adiantamentos", "Detalhes"
+        "Concentracao", "Inadimplencia", "Adiantamentos", "Detalhes"
     ])
 
     with tab1:
@@ -223,18 +262,33 @@ def main():
         fragment_categorias(df)
 
     with tab5:
-        fragment_tipo_documento(df)
-
-    with tab6:
         fragment_concentracao_risco(df)
 
-    with tab7:
+    with tab6:
         fragment_inadimplencia(df)
 
-    with tab8:
-        render_adiantamentos_receber(df_adiant, df_baixas)
+    with tab7:
+        # Aplicar filtro de filial nos adiantamentos e baixas
+        df_adiant_filtrado = df_adiant.copy()
+        df_baixas_filtrado = df_baixas.copy()
 
-    with tab9:
+        if filtro_filial != 'Todas as Filiais':
+            # Extrair código da filial do formato "COD - NOME"
+            if ' - ' in filtro_filial:
+                cod_filial = int(filtro_filial.split(' - ')[0])
+                if 'FILIAL' in df_adiant_filtrado.columns:
+                    df_adiant_filtrado = df_adiant_filtrado[df_adiant_filtrado['FILIAL'] == cod_filial]
+                if 'FILIAL' in df_baixas_filtrado.columns:
+                    df_baixas_filtrado = df_baixas_filtrado[df_baixas_filtrado['FILIAL'] == cod_filial]
+            else:
+                if 'NOME_FILIAL' in df_adiant_filtrado.columns:
+                    df_adiant_filtrado = df_adiant_filtrado[df_adiant_filtrado['NOME_FILIAL'] == filtro_filial]
+                if 'NOME_FILIAL' in df_baixas_filtrado.columns:
+                    df_baixas_filtrado = df_baixas_filtrado[df_baixas_filtrado['NOME_FILIAL'] == filtro_filial]
+
+        render_adiantamentos_receber(df_adiant_filtrado, df_baixas_filtrado)
+
+    with tab8:
         fragment_detalhes(df)
 
     # Footer

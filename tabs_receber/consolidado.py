@@ -353,11 +353,10 @@ def _render_por_tipo_empresa(df_pagar, df_receber, cores):
     df_tipo = df_tipo.sort_values('Saldo', ascending=False)
 
     cores_tipo = {
-        'Progresso Agroindustrial': cores['primaria'],
-        'Progresso Agricola': cores['sucesso'],
-        'Empresas do Grupo': cores['info'],
-        'Familia Sanders (PF)': cores['alerta'],
-        'Fazendas do Grupo': '#84cc16',
+        'Empresas Progresso': cores['primaria'],
+        'Ouro Branco': cores['sucesso'],
+        'Fazenda Peninsula': '#84cc16',
+        'Hotelaria': cores['info'],
         'Outros': cores['texto_secundario']
     }
 

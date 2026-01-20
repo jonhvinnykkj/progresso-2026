@@ -53,6 +53,28 @@ def render_clientes(df):
 
     st.divider()
 
+    # NOVO: Aging por Cliente + Clientes Críticos
+    col1, col2 = st.columns(2)
+
+    with col1:
+        _render_aging_por_cliente(df_pendentes, cores)
+
+    with col2:
+        _render_clientes_criticos(df, df_pendentes, cores)
+
+    st.divider()
+
+    # NOVO: Heatmap Cliente x Mês + Top por Filial
+    col1, col2 = st.columns(2)
+
+    with col1:
+        _render_heatmap_cliente_mes(df, cores)
+
+    with col2:
+        _render_top_clientes_por_filial(df, cores)
+
+    st.divider()
+
     # Performance de Recebimento por Cliente
     _render_performance_clientes(df, cores)
 
@@ -288,6 +310,244 @@ def _render_concentracao_abc(df, cores):
         st.info(f"**C**: {qtd_c} cli. (5% valor)")
 
 
+def _render_aging_por_cliente(df_pendentes, cores):
+    """Aging por cliente - faixas de vencimento"""
+
+    st.markdown("##### Aging por Cliente (Top 15)")
+
+    if len(df_pendentes) == 0:
+        st.info("Sem titulos pendentes")
+        return
+
+    # Calcular faixas de aging
+    df_aging = df_pendentes.copy()
+    df_aging['FAIXA'] = pd.cut(
+        df_aging['DIAS_ATRASO'],
+        bins=[-float('inf'), 0, 30, 60, 90, float('inf')],
+        labels=['A Vencer', '1-30d', '31-60d', '61-90d', '+90d']
+    )
+
+    # Agrupar por cliente e faixa
+    df_pivot = df_aging.groupby(['NOME_CLIENTE', 'FAIXA'])['SALDO'].sum().unstack(fill_value=0)
+
+    # Top 15 por saldo total
+    df_pivot['TOTAL'] = df_pivot.sum(axis=1)
+    df_pivot = df_pivot.nlargest(15, 'TOTAL')
+    df_pivot = df_pivot.drop(columns=['TOTAL'])
+
+    # Criar grafico de barras empilhadas
+    fig = go.Figure()
+
+    cores_faixas = {
+        'A Vencer': cores['primaria'],
+        '1-30d': cores['alerta'],
+        '31-60d': '#f97316',
+        '61-90d': cores['perigo'],
+        '+90d': '#7f1d1d'
+    }
+
+    for faixa in ['A Vencer', '1-30d', '31-60d', '61-90d', '+90d']:
+        if faixa in df_pivot.columns:
+            fig.add_trace(go.Bar(
+                y=df_pivot.index.str[:20],
+                x=df_pivot[faixa],
+                orientation='h',
+                name=faixa,
+                marker_color=cores_faixas.get(faixa, cores['info']),
+                text=[formatar_moeda(v) if v > 0 else '' for v in df_pivot[faixa]],
+                textposition='inside',
+                textfont=dict(size=8, color='white')
+            ))
+
+    fig.update_layout(
+        criar_layout(350, barmode='stack'),
+        yaxis={'autorange': 'reversed'},
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+        margin=dict(l=10, r=10, t=40, b=10)
+    )
+
+    st.plotly_chart(fig, use_container_width=True)
+
+
+def _render_clientes_criticos(df, df_pendentes, cores):
+    """Clientes críticos - alto valor + alto % vencido"""
+
+    st.markdown("##### Clientes Críticos (Risco)")
+
+    if len(df_pendentes) == 0:
+        st.info("Sem titulos pendentes")
+        return
+
+    # Calcular métricas por cliente
+    df_cli = df.groupby('NOME_CLIENTE').agg({
+        'VALOR_ORIGINAL': 'sum',
+        'SALDO': 'sum'
+    }).reset_index()
+
+    df_vencido = df_pendentes[df_pendentes['DIAS_ATRASO'] > 0].groupby('NOME_CLIENTE').agg({
+        'SALDO': 'sum',
+        'DIAS_ATRASO': 'max'
+    }).reset_index()
+    df_vencido.columns = ['NOME_CLIENTE', 'VENCIDO', 'DIAS_MAX']
+
+    df_cli = df_cli.merge(df_vencido, on='NOME_CLIENTE', how='left')
+    df_cli['VENCIDO'] = df_cli['VENCIDO'].fillna(0)
+    df_cli['DIAS_MAX'] = df_cli['DIAS_MAX'].fillna(0)
+    df_cli['PCT_VENCIDO'] = (df_cli['VENCIDO'] / df_cli['SALDO'] * 100).fillna(0)
+
+    # Score de risco: Valor vencido * (dias atraso / 30)
+    df_cli['SCORE_RISCO'] = df_cli['VENCIDO'] * (1 + df_cli['DIAS_MAX'] / 30)
+
+    # Top 10 críticos
+    df_criticos = df_cli[df_cli['VENCIDO'] > 0].nlargest(10, 'SCORE_RISCO')
+
+    if len(df_criticos) == 0:
+        st.success("Nenhum cliente com titulos vencidos!")
+        return
+
+    fig = go.Figure()
+
+    # Barra de vencido
+    fig.add_trace(go.Bar(
+        y=df_criticos['NOME_CLIENTE'].str[:20],
+        x=df_criticos['VENCIDO'],
+        orientation='h',
+        marker_color=cores['perigo'],
+        text=[f"{formatar_moeda(v)} | {int(d)}d" for v, d in zip(df_criticos['VENCIDO'], df_criticos['DIAS_MAX'])],
+        textposition='outside',
+        textfont=dict(size=9)
+    ))
+
+    fig.update_layout(
+        criar_layout(350),
+        yaxis={'autorange': 'reversed'},
+        margin=dict(l=10, r=100, t=10, b=10)
+    )
+
+    st.plotly_chart(fig, use_container_width=True)
+
+    # Resumo
+    total_critico = df_criticos['VENCIDO'].sum()
+    st.error(f"**Total em Risco:** {formatar_moeda(total_critico)} | **{len(df_criticos)} clientes**")
+
+
+def _render_heatmap_cliente_mes(df, cores):
+    """Heatmap de valores por cliente x mês"""
+
+    st.markdown("##### Heatmap: Cliente x Mês")
+
+    df_heat = df.copy()
+    df_heat['MES'] = df_heat['EMISSAO'].dt.to_period('M').astype(str)
+
+    # Top 12 clientes por valor
+    top_clientes = df_heat.groupby('NOME_CLIENTE')['VALOR_ORIGINAL'].sum().nlargest(12).index.tolist()
+    df_heat = df_heat[df_heat['NOME_CLIENTE'].isin(top_clientes)]
+
+    # Pivot
+    df_pivot = df_heat.groupby(['NOME_CLIENTE', 'MES'])['VALOR_ORIGINAL'].sum().unstack(fill_value=0)
+
+    # Ultimos 6 meses
+    if len(df_pivot.columns) > 6:
+        df_pivot = df_pivot[df_pivot.columns[-6:]]
+
+    if len(df_pivot) == 0 or len(df_pivot.columns) == 0:
+        st.info("Dados insuficientes para heatmap")
+        return
+
+    # Formatar nomes dos meses
+    meses_formatados = [m[-5:] for m in df_pivot.columns]
+
+    fig = go.Figure(data=go.Heatmap(
+        z=df_pivot.values,
+        x=meses_formatados,
+        y=df_pivot.index.str[:18],
+        colorscale=[
+            [0, cores['card']],
+            [0.5, cores['primaria']],
+            [1, cores['sucesso']]
+        ],
+        text=[[formatar_moeda(v) for v in row] for row in df_pivot.values],
+        texttemplate="%{text}",
+        textfont=dict(size=8),
+        hovertemplate="Cliente: %{y}<br>Mês: %{x}<br>Valor: %{text}<extra></extra>"
+    ))
+
+    fig.update_layout(
+        criar_layout(350),
+        xaxis_title="Mês",
+        margin=dict(l=10, r=10, t=10, b=40)
+    )
+
+    st.plotly_chart(fig, use_container_width=True)
+
+
+def _render_top_clientes_por_filial(df, cores):
+    """Top clientes por filial"""
+
+    st.markdown("##### Top Clientes por Filial")
+
+    if 'NOME_FILIAL' not in df.columns:
+        st.info("Coluna NOME_FILIAL nao disponivel")
+        return
+
+    # Selecionar filial
+    filiais = sorted(df['NOME_FILIAL'].dropna().unique().tolist())
+    if len(filiais) == 0:
+        st.info("Sem dados de filiais")
+        return
+
+    filial_sel = st.selectbox("Filial", filiais, key="filial_top_cli")
+
+    df_filial = df[df['NOME_FILIAL'] == filial_sel]
+
+    # Top 10 por valor
+    df_top = df_filial.groupby('NOME_CLIENTE').agg({
+        'VALOR_ORIGINAL': 'sum',
+        'SALDO': 'sum',
+        'CLIENTE': 'count'
+    }).nlargest(10, 'VALOR_ORIGINAL').reset_index()
+
+    df_top['RECEBIDO'] = df_top['VALOR_ORIGINAL'] - df_top['SALDO']
+
+    fig = go.Figure()
+
+    fig.add_trace(go.Bar(
+        y=df_top['NOME_CLIENTE'].str[:20],
+        x=df_top['RECEBIDO'],
+        orientation='h',
+        name='Recebido',
+        marker_color=cores['sucesso'],
+        text=[formatar_moeda(v) for v in df_top['RECEBIDO']],
+        textposition='inside',
+        textfont=dict(size=8, color='white')
+    ))
+
+    fig.add_trace(go.Bar(
+        y=df_top['NOME_CLIENTE'].str[:20],
+        x=df_top['SALDO'],
+        orientation='h',
+        name='Pendente',
+        marker_color=cores['alerta'],
+        text=[formatar_moeda(v) for v in df_top['SALDO']],
+        textposition='inside',
+        textfont=dict(size=8, color='white')
+    ))
+
+    fig.update_layout(
+        criar_layout(280, barmode='stack'),
+        yaxis={'autorange': 'reversed'},
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+        margin=dict(l=10, r=10, t=30, b=10)
+    )
+
+    st.plotly_chart(fig, use_container_width=True)
+
+    # Resumo da filial
+    total_filial = df_filial['VALOR_ORIGINAL'].sum()
+    total_pend = df_filial['SALDO'].sum()
+    st.caption(f"Total Filial: {formatar_moeda(total_filial)} | Pendente: {formatar_moeda(total_pend)}")
+
+
 def _render_scatter_clientes(df, cores):
     """Scatter plot: Valor Total vs % Pendente"""
 
@@ -332,141 +592,130 @@ def _render_scatter_clientes(df, cores):
 
 
 def _render_performance_clientes(df, cores):
-    """Análise de performance de recebimento por cliente usando DT_BAIXA e VENCTO_REAL"""
+    """Análise de Emissão x Vencimento por cliente"""
 
-    st.markdown("##### Performance de Recebimento por Cliente")
+    st.markdown("##### Emissão x Vencimento por Cliente")
 
-    # Verificar se temos as colunas necessárias
-    tem_dso = 'DSO' in df.columns
-    tem_pontual = 'PONTUAL' in df.columns
-    tem_reneg = 'RENEGOCIADO' in df.columns
-
-    if not tem_dso and not tem_pontual and not tem_reneg:
-        st.info("Dados de performance nao disponiveis (colunas DT_BAIXA/VENCTO_REAL)")
+    if len(df) == 0:
+        st.info("Sem dados disponiveis")
         return
 
     col1, col2 = st.columns(2)
 
     with col1:
-        if tem_dso:
-            st.markdown("###### Melhores Pagadores (Menor DSO)")
+        st.markdown("###### Volume por Mês de Emissão")
 
-            # Filtrar apenas recebidos com DSO válido
-            df_receb = df[(df['SALDO'] == 0) & df['DSO'].notna() & (df['DSO'] > 0)]
+        # Agrupar por mês de emissão
+        df_emissao = df.copy()
+        df_emissao['MES_EMISSAO'] = df_emissao['EMISSAO'].dt.to_period('M').astype(str)
 
-            if len(df_receb) > 0:
-                df_dso = df_receb.groupby('NOME_CLIENTE').agg({
-                    'DSO': 'mean',
-                    'VALOR_ORIGINAL': 'sum',
-                    'CLIENTE': 'count'
-                }).reset_index()
+        df_mes_emissao = df_emissao.groupby('MES_EMISSAO').agg({
+            'VALOR_ORIGINAL': 'sum',
+            'CLIENTE': 'count'
+        }).reset_index()
+        df_mes_emissao.columns = ['Mês', 'Valor', 'Qtd']
 
-                # Filtrar clientes com pelo menos 3 títulos
-                df_dso = df_dso[df_dso['CLIENTE'] >= 3]
+        # Últimos 12 meses
+        if len(df_mes_emissao) > 12:
+            df_mes_emissao = df_mes_emissao.tail(12)
 
-                # Top 10 menores DSO
-                df_melhores = df_dso.nsmallest(10, 'DSO')
+        if len(df_mes_emissao) > 0:
+            fig = go.Figure()
 
-                if len(df_melhores) > 0:
-                    fig = go.Figure(go.Bar(
-                        y=df_melhores['NOME_CLIENTE'].str[:22],
-                        x=df_melhores['DSO'],
-                        orientation='h',
-                        marker_color=cores['sucesso'],
-                        text=[f"{d:.0f}d | {formatar_moeda(v)}" for d, v in zip(df_melhores['DSO'], df_melhores['VALOR_ORIGINAL'])],
-                        textposition='outside',
-                        textfont=dict(size=9)
-                    ))
+            fig.add_trace(go.Bar(
+                x=df_mes_emissao['Mês'],
+                y=df_mes_emissao['Valor'],
+                marker_color=cores['primaria'],
+                text=[formatar_moeda(v) for v in df_mes_emissao['Valor']],
+                textposition='outside',
+                textfont=dict(size=8)
+            ))
 
-                    fig.update_layout(
-                        criar_layout(280),
-                        yaxis={'autorange': 'reversed'},
-                        xaxis_title='DSO (dias)',
-                        margin=dict(l=10, r=100, t=10, b=30)
-                    )
+            fig.update_layout(
+                criar_layout(280),
+                xaxis_title='Mês Emissão',
+                margin=dict(l=10, r=10, t=10, b=50),
+                xaxis=dict(tickangle=-45)
+            )
 
-                    st.plotly_chart(fig, use_container_width=True)
-                else:
-                    st.info("Poucos dados para analise")
-            else:
-                st.info("Sem dados de recebimento")
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.info("Sem dados de emissão")
 
     with col2:
-        if tem_dso:
-            st.markdown("###### Piores Pagadores (Maior DSO)")
+        st.markdown("###### Volume por Mês de Vencimento")
 
-            df_receb = df[(df['SALDO'] == 0) & df['DSO'].notna() & (df['DSO'] > 0)]
+        # Agrupar por mês de vencimento
+        df_vencimento = df.copy()
+        df_vencimento = df_vencimento[df_vencimento['VENCIMENTO'].notna()]
+        df_vencimento['MES_VENCIMENTO'] = df_vencimento['VENCIMENTO'].dt.to_period('M').astype(str)
 
-            if len(df_receb) > 0:
-                df_dso = df_receb.groupby('NOME_CLIENTE').agg({
-                    'DSO': 'mean',
-                    'VALOR_ORIGINAL': 'sum',
-                    'CLIENTE': 'count'
-                }).reset_index()
+        df_mes_venc = df_vencimento.groupby('MES_VENCIMENTO').agg({
+            'VALOR_ORIGINAL': 'sum',
+            'SALDO': 'sum',
+            'CLIENTE': 'count'
+        }).reset_index()
+        df_mes_venc.columns = ['Mês', 'Valor', 'Saldo', 'Qtd']
 
-                df_dso = df_dso[df_dso['CLIENTE'] >= 3]
-                df_piores = df_dso.nlargest(10, 'DSO')
+        # Últimos 12 meses
+        if len(df_mes_venc) > 12:
+            df_mes_venc = df_mes_venc.tail(12)
 
-                if len(df_piores) > 0:
-                    fig = go.Figure(go.Bar(
-                        y=df_piores['NOME_CLIENTE'].str[:22],
-                        x=df_piores['DSO'],
-                        orientation='h',
-                        marker_color=cores['perigo'],
-                        text=[f"{d:.0f}d | {formatar_moeda(v)}" for d, v in zip(df_piores['DSO'], df_piores['VALOR_ORIGINAL'])],
-                        textposition='outside',
-                        textfont=dict(size=9)
-                    ))
+        if len(df_mes_venc) > 0:
+            fig = go.Figure()
 
-                    fig.update_layout(
-                        criar_layout(280),
-                        yaxis={'autorange': 'reversed'},
-                        xaxis_title='DSO (dias)',
-                        margin=dict(l=10, r=100, t=10, b=30)
-                    )
+            # Valor recebido
+            df_mes_venc['Recebido'] = df_mes_venc['Valor'] - df_mes_venc['Saldo']
 
-                    st.plotly_chart(fig, use_container_width=True)
-                else:
-                    st.info("Poucos dados para analise")
-            else:
-                st.info("Sem dados de recebimento")
+            fig.add_trace(go.Bar(
+                x=df_mes_venc['Mês'],
+                y=df_mes_venc['Recebido'],
+                name='Recebido',
+                marker_color=cores['sucesso']
+            ))
 
-    # Tabela de performance
-    if tem_dso or tem_pontual or tem_reneg:
-        with st.expander("Ver ranking completo de performance", expanded=False):
-            df_receb = df[df['SALDO'] == 0].copy() if tem_dso else df.copy()
+            fig.add_trace(go.Bar(
+                x=df_mes_venc['Mês'],
+                y=df_mes_venc['Saldo'],
+                name='Pendente',
+                marker_color=cores['alerta']
+            ))
 
-            agg_dict = {'VALOR_ORIGINAL': 'sum', 'CLIENTE': 'count'}
-            if tem_dso:
-                agg_dict['DSO'] = 'mean'
-            if tem_pontual:
-                agg_dict['PONTUAL'] = 'mean'
-            if tem_reneg:
-                agg_dict['RENEGOCIADO'] = 'mean'
+            fig.update_layout(
+                criar_layout(280, barmode='stack'),
+                xaxis_title='Mês Vencimento',
+                margin=dict(l=10, r=10, t=10, b=50),
+                xaxis=dict(tickangle=-45),
+                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+            )
 
-            df_perf = df_receb.groupby('NOME_CLIENTE').agg(agg_dict).reset_index()
-            df_perf = df_perf[df_perf['CLIENTE'] >= 2]
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.info("Sem dados de vencimento")
 
-            # Renomear colunas
-            col_names = {'NOME_CLIENTE': 'Cliente', 'VALOR_ORIGINAL': 'Valor', 'CLIENTE': 'Titulos'}
-            if tem_dso:
-                col_names['DSO'] = 'DSO Medio'
-            if tem_pontual:
-                col_names['PONTUAL'] = '% Pontual'
-                df_perf['PONTUAL'] = df_perf['PONTUAL'] * 100
-            if tem_reneg:
-                col_names['RENEGOCIADO'] = '% Reneg'
-                df_perf['RENEGOCIADO'] = df_perf['RENEGOCIADO'] * 100
+    # Tabela comparativa Emissão x Vencimento
+    with st.expander("Ver detalhes Emissão x Vencimento", expanded=False):
+        df_comp = df.copy()
+        df_comp = df_comp[df_comp['EMISSAO'].notna() & df_comp['VENCIMENTO'].notna()]
 
-            df_perf = df_perf.rename(columns=col_names)
+        # Calcular prazo médio (dias entre emissão e vencimento)
+        df_comp['PRAZO'] = (df_comp['VENCIMENTO'] - df_comp['EMISSAO']).dt.days
 
-            # Ordenar por DSO se disponível
-            if 'DSO Medio' in df_perf.columns:
-                df_perf = df_perf.sort_values('DSO Medio', ascending=True)
+        df_resumo = df_comp.groupby('NOME_CLIENTE').agg({
+            'VALOR_ORIGINAL': 'sum',
+            'SALDO': 'sum',
+            'PRAZO': 'mean',
+            'CLIENTE': 'count'
+        }).reset_index()
 
-            df_perf['Valor'] = df_perf['Valor'].apply(lambda x: formatar_moeda(x, completo=True))
+        df_resumo.columns = ['Cliente', 'Valor Total', 'Saldo', 'Prazo Médio (dias)', 'Qtd Títulos']
+        df_resumo['Prazo Médio (dias)'] = df_resumo['Prazo Médio (dias)'].round(0).astype(int)
+        df_resumo = df_resumo.sort_values('Valor Total', ascending=False)
 
-            st.dataframe(df_perf.head(50), use_container_width=True, hide_index=True, height=350)
+        df_resumo['Valor Total'] = df_resumo['Valor Total'].apply(lambda x: formatar_moeda(x, completo=True))
+        df_resumo['Saldo'] = df_resumo['Saldo'].apply(lambda x: formatar_moeda(x, completo=True))
+
+        st.dataframe(df_resumo.head(50), use_container_width=True, hide_index=True, height=350)
 
 
 def _render_busca_cliente(df, df_pendentes, cores):

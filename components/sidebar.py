@@ -30,10 +30,9 @@ def render_sidebar(df_contas, filiais_opcoes, categorias_opcoes):
 
         st.divider()
 
-        # Filtros
+        # Filtros (Filial agora esta na navbar)
         st.markdown(f"<p style='color: {cores['texto']}; font-size: 0.8rem; font-weight: 600; margin-bottom: 0.5rem;'>Filtros</p>", unsafe_allow_html=True)
 
-        filtro_filial = st.selectbox("Filial", filiais_opcoes)
         filtro_status = st.selectbox("Status", STATUS_OPCOES)
         filtro_categoria = st.selectbox("Categoria", categorias_opcoes)
 
@@ -106,4 +105,4 @@ def render_sidebar(df_contas, filiais_opcoes, categorias_opcoes):
         </div>
         """, unsafe_allow_html=True)
 
-    return filtro_filial, filtro_status, filtro_categoria, busca_fornecedor, filtro_tipo_doc, filtro_forma_pagto
+    return None, filtro_status, filtro_categoria, busca_fornecedor, filtro_tipo_doc, filtro_forma_pagto

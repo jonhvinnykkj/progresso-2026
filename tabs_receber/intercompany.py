@@ -9,8 +9,19 @@ import plotly.graph_objects as go
 from datetime import datetime
 
 from config.theme import get_cores
-from config.settings import INTERCOMPANY_PATTERNS, INTERCOMPANY_TIPOS
+from config.settings import INTERCOMPANY_PATTERNS, INTERCOMPANY_TIPOS, INTERCOMPANY_PADRONIZACAO
 from utils.formatters import formatar_moeda, formatar_numero
+
+
+def padronizar_nome_ic(nome):
+    """Padroniza o nome para comparação"""
+    if pd.isna(nome):
+        return nome
+    nome_limpo = str(nome).strip().upper()
+    for variacao, padrao in INTERCOMPANY_PADRONIZACAO.items():
+        if variacao.upper() in nome_limpo:
+            return padrao
+    return nome
 
 
 def identificar_intercompany(df):
@@ -23,6 +34,10 @@ def identificar_intercompany(df):
 
 def classificar_tipo_intercompany(nome):
     """Classifica o tipo de operacao intercompany"""
+    nome_padrao = padronizar_nome_ic(nome)
+    if nome_padrao in INTERCOMPANY_TIPOS:
+        return INTERCOMPANY_TIPOS[nome_padrao]
+    # Fallback para busca parcial
     nome_upper = str(nome).upper()
     for padrao, tipo in INTERCOMPANY_TIPOS.items():
         if padrao in nome_upper:
@@ -223,11 +238,10 @@ def _render_analise_devedores(df_inter, cores):
         df_top = df_clientes.head(10)
 
         cores_tipo = {
-            'Progresso Agroindustrial': cores['primaria'],
-            'Progresso Agricola': cores['sucesso'],
-            'Empresas do Grupo': cores['info'],
-            'Familia Sanders (PF)': cores['alerta'],
-            'Fazendas do Grupo': '#84cc16',
+            'Empresas Progresso': cores['primaria'],
+            'Ouro Branco': cores['sucesso'],
+            'Fazenda Peninsula': '#84cc16',
+            'Hotelaria': cores['info'],
             'Outros': cores['texto_secundario']
         }
 
@@ -664,11 +678,10 @@ def _render_fluxo_intercompany(df_inter, cores):
     df_tipo = df_tipo.sort_values('SALDO', ascending=False)
 
     cores_tipo = {
-        'Progresso Agroindustrial': cores['primaria'],
-        'Progresso Agricola': cores['sucesso'],
-        'Empresas do Grupo': cores['info'],
-        'Familia Sanders (PF)': cores['alerta'],
-        'Fazendas do Grupo': '#84cc16',
+        'Empresas Progresso': cores['primaria'],
+        'Ouro Branco': cores['sucesso'],
+        'Fazenda Peninsula': '#84cc16',
+        'Hotelaria': cores['info'],
         'Outros': cores['texto_secundario']
     }
 

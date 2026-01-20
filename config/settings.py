@@ -45,71 +45,128 @@ ORDEM_AGING = [
 ]
 
 # =============================================================================
-# INTERCOMPANY - Padrões de identificação
+# INTERCOMPANY - Padrões de identificação e padronização
 # =============================================================================
-# Empresas do Grupo Progresso e pessoas relacionadas (CPFs)
-# Usado para separar operações internas das contas a pagar externas
-# IMPORTANTE: Esses padrões são usados com .str.contains() - parcial match
-# NOTA: Os dados são convertidos para UPPERCASE antes da comparação
-#
-# NOMES EXATOS extraídos dos arquivos Excel:
-# A Pagar: PROGRESSO AGRICOLA (I,M,P,T,-), PROGRESSO AGROINDUST, BRASIL AGRICOLA LTDA,
-#          FAZENDA OURO BRANCO, FAZENDA PENINSULA, FAZENDA TROPICAL, SEMENTES OURO BRANCO,
-#          OURO BRANCO INSUMOS, HOTEL TROPICAL PARAC, POUSADA TROPICAL,
-#          CORNELIO ADRIANO SAN, GREGORY SANDERS - FA, GREICY HEINRICH SAND,
-#          GREICY HEIRINCH SAND, GUEBERSON SANDERS -
-# A Receber: Similar + PROGRESSO AGRICOLA L, PROGRESSO AGRICOLA ', GUEBERSON SANDERS (
+# REGRA: Se o FORNECEDOR/CLIENTE corresponde a uma FILIAL do grupo = INTERCOMPANY
+# Exemplo: PROGRESSO MATRIZ paga para FAZENDA PENINSULA = Intercompany
 
-INTERCOMPANY_PATTERNS = [
-    # Empresas Progresso (todas as filiais)
-    'PROGRESSO AGROINDUST',   # Progresso Agroindustrial
-    'PROGRESSO AGRICOLA',     # Progresso Agricola (filiais: I, L, M, P, T, -, ')
-    'BRASIL AGRICOLA LTDA',   # Brasil Agricola LTDA
-
-    # Fazendas do Grupo (específicas)
-    'FAZENDA TROPICAL',       # Fazenda Tropical
-    'FAZENDA PENINSULA',      # Fazenda Peninsula
-    'FAZENDA OURO BRANCO',    # Fazenda Ouro Branco
-
-    # Ouro Branco (Sementes/Insumos)
-    'SEMENTES OURO BRANCO',   # Sementes Ouro Branco
-    'OURO BRANCO INSUMOS',    # Ouro Branco Insumos
-
-    # Hotelaria do Grupo
-    'HOTEL TROPICAL PARAC',   # Hotel Tropical Paracatu
-    'POUSADA TROPICAL',       # Pousada Tropical
-
-    # Família Sanders (CPFs do Grupo) - nomes exatos
-    'CORNELIO ADRIANO SAN',   # Cornelio Adriano Sanders
-    'GREGORY SANDERS - FA',   # Gregory Sanders - Fazenda
-    'GREICY HEINRICH SAND',   # Greicy Heinrich Sanders
-    'GREICY HEIRINCH SAND',   # Greicy Heirinch Sanders (variação)
-    'GUEBERSON SANDERS',      # Gueberson Sanders (- e ()
+# Lista de FILIAIS do grupo (27 filiais)
+FILIAIS_GRUPO = [
+    'AG3 AGRO',
+    'BRASIL AGRICOLA LTDA',
+    'CG3 AGRO',
+    'FAZENDA OURO BRANCO',
+    'IMPERIAL',
+    'PENINSULA',
+    'PROGRESSO AGROINDUSTRIAL - BA',
+    'PROGRESSO AGROINDUSTRIAL - DF',
+    'PROGRESSO AGROINDUSTRIAL - GO',
+    'PROGRESSO AGROINDUSTRIAL - GO(ST HELENA)',
+    'PROGRESSO AGROINDUSTRIAL - MA',
+    'PROGRESSO AGROINDUSTRIAL - MA(BALSAS)',
+    'PROGRESSO AGROINDUSTRIAL - MG',
+    'PROGRESSO AGROINDUSTRIAL - MT',
+    'PROGRESSO AGROINDUSTRIAL - MT (PL)',
+    'PROGRESSO AGROINDUSTRIAL - MT(LV)',
+    'PROGRESSO AGROINDUSTRIAL - PA',
+    'PROGRESSO AGROINDUSTRIAL - PA(TAILANDIA)',
+    'PROGRESSO AGROINDUSTRIAL - PI',
+    'PROGRESSO AGROINDUSTRIAL - RO',
+    'PROGRESSO AGROINDUSTRIAL - TO',
+    'PROGRESSO FBO',
+    'PROGRESSO MATRIZ',
+    'RAINHA DA SERRA',
+    'SDS PARTICIPACOES',
+    'TROPICAL',
+    'TROPICAL AGROPARTICIPACOES',
 ]
 
-# Mapeamento de tipo de intercompany para classificação
+# Padrões para IDENTIFICAR intercompany no FORNECEDOR/CLIENTE
+# Se o nome do fornecedor/cliente contém algum desses padrões = é uma filial = intercompany
+# IMPORTANTE: Esses padroes excluem registros de Contas a Pagar e Contas a Receber
+INTERCOMPANY_PATTERNS = [
+    # Filiais principais (match parcial - ordem importa, mais especifico primeiro)
+    'AG3 AGRO',
+    'BRASIL AGRICOLA',
+    'CG3 AGRO',
+    'FAZENDA OURO BRANCO',
+    'OURO BRANCO INSUMOS',
+    'SEMENTES OURO BRANCO',
+    'OURO BRANCO',            # Match generico para qualquer Ouro Branco
+    'IMPERIAL',
+    'FAZENDA PENINSULA',
+    'PENINSULA',
+    'PROGRESSO AGROINDUSTRIAL',  # Pega todas as variações de Progresso Agroindustrial
+    'PROGRESSO AGRICOLA',        # Pega Progresso Agricola (variacao)
+    'PROGRESSO AGRO',
+    'PROGRESSO FBO',
+    'PROGRESSO MATRIZ',
+    'RAINHA DA SERRA',
+    'SDS PARTICIPACOES',
+    'TROPICAL AGROPART',
+    'FAZENDA TROPICAL',
+    'HOTEL TROPICAL',
+    'POUSADA TROPICAL',
+    'TROPICAL',               # Match generico para qualquer Tropical
+    # Pessoas do Grupo (socios/familia) - tambem sao intercompany
+    'CORNELIO',
+    'GREICY',
+    'GREGORY SANDERS',
+    'GUEBERSON SANDERS',
+]
+
+# Mapeamento para PADRONIZAR nomes de FORNECEDOR/CLIENTE -> FILIAL correspondente
+INTERCOMPANY_PADRONIZACAO = {
+    # Progresso Agroindustrial (filiais por estado)
+    'PROGRESSO AGROINDUST': 'PROGRESSO AGROINDUSTRIAL',
+    'PROGRESSO MATRIZ': 'PROGRESSO AGROINDUSTRIAL',
+
+    # Progresso Agricola (filial separada)
+    'PROGRESSO AGRICOLA': 'PROGRESSO AGRICOLA',
+
+    # Ouro Branco / FBO (todas as variações)
+    'PROGRESSO FBO': 'OURO BRANCO',           # FBO = Fazenda Ouro Branco
+    'FAZENDA OURO BRANCO': 'OURO BRANCO',
+    'OURO BRANCO INSUMOS': 'OURO BRANCO',
+    'SEMENTES OURO BRANCO': 'OURO BRANCO',
+
+    # Peninsula
+    'FAZENDA PENINSULA': 'PENINSULA',
+    'PENINSULA': 'PENINSULA',
+
+    # Tropical (todas as variações)
+    'FAZENDA TROPICAL': 'TROPICAL',
+    'HOTEL TROPICAL': 'TROPICAL',
+    'POUSADA TROPICAL': 'TROPICAL',
+    'TROPICAL AGROPART': 'TROPICAL',
+
+    # Outras filiais
+    'BRASIL AGRICOLA': 'BRASIL AGRICOLA',
+    'AG3 AGRO': 'AG3 AGRO',
+    'CG3 AGRO': 'CG3 AGRO',
+    'RAINHA DA SERRA': 'RAINHA DA SERRA',
+    'SDS PARTICIPACOES': 'SDS PARTICIPACOES',
+    'IMPERIAL': 'IMPERIAL',
+
+    # Familia Sanders (socios/pessoas fisicas do grupo)
+    'CORNELIO': 'FAMILIA SANDERS',
+    'GREICY': 'FAMILIA SANDERS',
+    'GREGORY SANDERS': 'FAMILIA SANDERS',
+    'GUEBERSON SANDERS': 'FAMILIA SANDERS',
+}
+
+# Classificação por TIPO de intercompany (para graficos e agrupamentos)
 INTERCOMPANY_TIPOS = {
-    # Empresas Progresso
-    'PROGRESSO AGROINDUST': 'Progresso Agroindustrial',
+    'PROGRESSO AGROINDUSTRIAL': 'Progresso Agroindustrial',
     'PROGRESSO AGRICOLA': 'Progresso Agricola',
+    'OURO BRANCO': 'Ouro Branco',
+    'PENINSULA': 'Peninsula',
+    'TROPICAL': 'Tropical',
     'BRASIL AGRICOLA': 'Brasil Agricola',
-
-    # Fazendas do Grupo
-    'FAZENDA TROPICAL': 'Fazendas do Grupo',
-    'FAZENDA PENINSULA': 'Fazendas do Grupo',
-    'FAZENDA OURO BRANCO': 'Fazendas do Grupo',
-
-    # Ouro Branco (Sementes/Insumos)
-    'SEMENTES OURO BRANCO': 'Ouro Branco (Sementes/Insumos)',
-    'OURO BRANCO INSUMOS': 'Ouro Branco (Sementes/Insumos)',
-
-    # Hotelaria do Grupo
-    'HOTEL TROPICAL': 'Hotelaria do Grupo',
-    'POUSADA TROPICAL': 'Hotelaria do Grupo',
-
-    # Família Sanders (PF/CPF)
-    'CORNELIO': 'Familia Sanders (PF)',
-    'GREGORY SANDERS': 'Familia Sanders (PF)',
-    'GREICY': 'Familia Sanders (PF)',
-    'GUEBERSON': 'Familia Sanders (PF)',
+    'AG3 AGRO': 'AG3 Agro',
+    'CG3 AGRO': 'CG3 Agro',
+    'RAINHA DA SERRA': 'Rainha da Serra',
+    'SDS PARTICIPACOES': 'SDS Participacoes',
+    'IMPERIAL': 'Imperial',
+    'FAMILIA SANDERS': 'Familia Sanders',
 }

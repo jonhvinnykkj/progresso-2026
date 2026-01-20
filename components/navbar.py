@@ -19,16 +19,17 @@ MESES_COMPLETO = {
 }
 
 
-def render_navbar(pagina_atual: str = "pagar", mostrar_filtro_tempo: bool = True):
+def render_navbar(pagina_atual: str = "pagar", mostrar_filtro_tempo: bool = True, filiais_opcoes: list = None):
     """
-    Renderiza a barra de navegacao superior com filtros de tempo
+    Renderiza a barra de navegacao superior com filtros de tempo e filial
 
     Args:
         pagina_atual: 'pagar', 'intercompany', 'receber'
         mostrar_filtro_tempo: Se deve mostrar os filtros de tempo
+        filiais_opcoes: Lista de filiais disponiveis para filtro
 
     Returns:
-        tuple: (data_inicio, data_fim) se mostrar_filtro_tempo=True, else None
+        tuple: (data_inicio, data_fim, filtro_filial) se mostrar_filtro_tempo=True, else None
     """
     cores = get_cores()
     hoje = datetime.now()
@@ -144,9 +145,10 @@ def render_navbar(pagina_atual: str = "pagar", mostrar_filtro_tempo: bool = True
         else:
             st.page_link("pages/2_Contas_a_Receber.py", label="A Receber", icon=":material/account_balance:")
 
-    # Filtros de tempo
+    # Filtros de tempo e filial
     data_inicio = None
     data_fim = None
+    filtro_filial = 'Todas as Filiais'
 
     if mostrar_filtro_tempo:
         # Inicializar estados
@@ -165,18 +167,31 @@ def render_navbar(pagina_atual: str = "pagar", mostrar_filtro_tempo: bool = True
         if 'filtro_data_fim' not in st.session_state:
             st.session_state.filtro_data_fim = hoje.date()
 
-        # Container de filtros de tempo
-        st.markdown(f"""
-        <div style="background: {cores['card']}; border: 1px solid {cores['borda']};
-                    border-radius: 10px; padding: 0.5rem 1rem; margin-bottom: 0.5rem;">
-            <span style="color: {cores['texto_secundario']}; font-size: 0.7rem; font-weight: 600;">
-                PERIODO
-            </span>
-        </div>
-        """, unsafe_allow_html=True)
+        # Container de filtros de tempo e filial
+        col_periodo, col_filial = st.columns([3, 1])
 
-        # Tabs para tipo de filtro
-        col_tipo, col_filtros = st.columns([1, 4])
+        with col_periodo:
+            st.markdown(f"""
+            <div style="background: {cores['card']}; border: 1px solid {cores['borda']};
+                        border-radius: 10px; padding: 0.5rem 1rem; margin-bottom: 0.5rem;">
+                <span style="color: {cores['texto_secundario']}; font-size: 0.7rem; font-weight: 600;">
+                    PERIODO
+                </span>
+            </div>
+            """, unsafe_allow_html=True)
+
+        with col_filial:
+            st.markdown(f"""
+            <div style="background: {cores['card']}; border: 1px solid {cores['borda']};
+                        border-radius: 10px; padding: 0.5rem 1rem; margin-bottom: 0.5rem;">
+                <span style="color: {cores['texto_secundario']}; font-size: 0.7rem; font-weight: 600;">
+                    FILIAL
+                </span>
+            </div>
+            """, unsafe_allow_html=True)
+
+        # Tabs para tipo de filtro + filtro de filial
+        col_tipo, col_filtros, col_filial_select = st.columns([1, 3, 1.2])
 
         with col_tipo:
             tipo_periodo = st.radio(
@@ -317,6 +332,38 @@ def render_navbar(pagina_atual: str = "pagar", mostrar_filtro_tempo: bool = True
                 if data_fim < data_inicio:
                     data_fim = data_inicio
 
+        # Coluna do filtro de filial
+        with col_filial_select:
+            # Inicializar estado da filial
+            if 'filtro_filial_navbar' not in st.session_state:
+                st.session_state.filtro_filial_navbar = 'Todas as Filiais'
+
+            # Opcoes de filial
+            if filiais_opcoes and len(filiais_opcoes) > 0:
+                opcoes = filiais_opcoes
+            else:
+                opcoes = ['Todas as Filiais']
+
+            filtro_filial = st.selectbox(
+                "Filial",
+                opcoes,
+                index=opcoes.index(st.session_state.filtro_filial_navbar) if st.session_state.filtro_filial_navbar in opcoes else 0,
+                key="nav_filial",
+                label_visibility="collapsed"
+            )
+            st.session_state.filtro_filial_navbar = filtro_filial
+
+            # Mostrar filial selecionada
+            if filtro_filial != 'Todas as Filiais':
+                st.markdown(f"""
+                <div style="text-align: center; padding: 0.2rem; background: {cores['info']}15;
+                            border-radius: 4px; margin-top: 0.2rem;">
+                    <span style="color: {cores['info']}; font-size: 0.65rem; font-weight: 500;">
+                        Filtrado
+                    </span>
+                </div>
+                """, unsafe_allow_html=True)
+
         # Mostrar periodo selecionado
         if data_inicio and data_fim:
             st.markdown(f"""
@@ -329,7 +376,7 @@ def render_navbar(pagina_atual: str = "pagar", mostrar_filtro_tempo: bool = True
             """, unsafe_allow_html=True)
 
     if mostrar_filtro_tempo:
-        return data_inicio, data_fim
+        return data_inicio, data_fim, filtro_filial
     return None
 
 
