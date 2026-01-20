@@ -152,10 +152,35 @@ def main():
         fragment_formas_pagamento(df)
 
     with tab7:
-        render_custos_financeiros(df_custos_financeiros)
+        # Aplicar filtro de filial nos custos financeiros
+        df_custos_filtrado = df_custos_financeiros.copy()
+        if filtro_filial != 'Todas as Filiais':
+            if ' - ' in filtro_filial:
+                cod_filial = int(filtro_filial.split(' - ')[0])
+                if 'FILIAL' in df_custos_filtrado.columns:
+                    df_custos_filtrado = df_custos_filtrado[df_custos_filtrado['FILIAL'] == cod_filial]
+            else:
+                if 'NOME_FILIAL' in df_custos_filtrado.columns:
+                    df_custos_filtrado = df_custos_filtrado[df_custos_filtrado['NOME_FILIAL'] == filtro_filial]
+        render_custos_financeiros(df_custos_filtrado)
 
     with tab8:
-        render_adiantamentos(df_adiant, df_baixas)
+        # Aplicar filtro de filial nos adiantamentos e baixas
+        df_adiant_filtrado = df_adiant.copy()
+        df_baixas_filtrado = df_baixas.copy()
+        if filtro_filial != 'Todas as Filiais':
+            if ' - ' in filtro_filial:
+                cod_filial = int(filtro_filial.split(' - ')[0])
+                if 'FILIAL' in df_adiant_filtrado.columns:
+                    df_adiant_filtrado = df_adiant_filtrado[df_adiant_filtrado['FILIAL'] == cod_filial]
+                if 'FILIAL' in df_baixas_filtrado.columns:
+                    df_baixas_filtrado = df_baixas_filtrado[df_baixas_filtrado['FILIAL'] == cod_filial]
+            else:
+                if 'NOME_FILIAL' in df_adiant_filtrado.columns:
+                    df_adiant_filtrado = df_adiant_filtrado[df_adiant_filtrado['NOME_FILIAL'] == filtro_filial]
+                if 'NOME_FILIAL' in df_baixas_filtrado.columns:
+                    df_baixas_filtrado = df_baixas_filtrado[df_baixas_filtrado['NOME_FILIAL'] == filtro_filial]
+        render_adiantamentos(df_adiant_filtrado, df_baixas_filtrado)
 
     with tab9:
         fragment_detalhes(df)
