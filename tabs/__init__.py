@@ -7,6 +7,7 @@ from .filiais import render_filiais
 from .adiantamentos import render_adiantamentos
 from .detalhes import render_detalhes
 from .analise_avancada import render_analise_avancada
-from .custos_financeiros import render_custos_financeiros
+from .bancos import render_bancos
+from .juros_cambio import render_juros_cambio
 from .formas_pagamento import render_formas_pagamento
 from .cambio import render_cambio

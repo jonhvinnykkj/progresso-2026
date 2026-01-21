@@ -29,7 +29,8 @@ from tabs.categorias import render_categorias
 from tabs.formas_pagamento import render_formas_pagamento
 from tabs.tipo_documento import render_tipo_documento
 from tabs.adiantamentos import render_adiantamentos
-from tabs.custos_financeiros import render_custos_financeiros
+from tabs.bancos import render_bancos
+from tabs.juros_cambio import render_juros_cambio
 from tabs.detalhes import render_detalhes
 
 
@@ -126,10 +127,10 @@ def main():
         cor=cores['primaria']
     )
 
-    # Tabs (9 tabs)
-    tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9 = st.tabs([
+    # Tabs (10 tabs)
+    tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10 = st.tabs([
         "Visao Geral", "Vencimentos", "Fornecedores", "Categorias",
-        "Tipo Documento", "Formas Pagto", "Custos Financ.", "Adiantamentos", "Detalhes"
+        "Tipo Documento", "Formas Pagto", "Bancos", "Juros e Cambio", "Adiantamentos", "Detalhes"
     ])
 
     with tab1:
@@ -152,19 +153,23 @@ def main():
         fragment_formas_pagamento(df)
 
     with tab7:
-        # Aplicar filtro de filial nos custos financeiros
-        df_custos_filtrado = df_custos_financeiros.copy()
+        # Aplicar filtro de filial nos bancos (custos financeiros)
+        df_bancos_filtrado = df_custos_financeiros.copy()
         if filtro_filial != 'Todas as Filiais':
             if ' - ' in filtro_filial:
                 cod_filial = int(filtro_filial.split(' - ')[0])
-                if 'FILIAL' in df_custos_filtrado.columns:
-                    df_custos_filtrado = df_custos_filtrado[df_custos_filtrado['FILIAL'] == cod_filial]
+                if 'FILIAL' in df_bancos_filtrado.columns:
+                    df_bancos_filtrado = df_bancos_filtrado[df_bancos_filtrado['FILIAL'] == cod_filial]
             else:
-                if 'NOME_FILIAL' in df_custos_filtrado.columns:
-                    df_custos_filtrado = df_custos_filtrado[df_custos_filtrado['NOME_FILIAL'] == filtro_filial]
-        render_custos_financeiros(df_custos_filtrado)
+                if 'NOME_FILIAL' in df_bancos_filtrado.columns:
+                    df_bancos_filtrado = df_bancos_filtrado[df_bancos_filtrado['NOME_FILIAL'] == filtro_filial]
+        render_bancos(df_bancos_filtrado)
 
     with tab8:
+        # Juros e Cambio - usa df filtrado (todas as contas, nao apenas bancos)
+        render_juros_cambio(df)
+
+    with tab9:
         # Aplicar filtro de filial nos adiantamentos e baixas
         df_adiant_filtrado = df_adiant.copy()
         df_baixas_filtrado = df_baixas.copy()
@@ -182,7 +187,7 @@ def main():
                     df_baixas_filtrado = df_baixas_filtrado[df_baixas_filtrado['NOME_FILIAL'] == filtro_filial]
         render_adiantamentos(df_adiant_filtrado, df_baixas_filtrado)
 
-    with tab9:
+    with tab10:
         fragment_detalhes(df)
 
     # Footer
