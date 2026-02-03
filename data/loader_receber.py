@@ -36,14 +36,14 @@ def carregar_dados_receber():
     """Carrega e processa os dados de Contas a Receber dos arquivos Excel"""
 
     # Carregar dados dos arquivos Excel
-    df_contas = pd.read_excel('Contas a receber.xlsx')
+    df_contas = pd.read_excel('Contas a receber.xlsx', sheet_name='Planilha1')
     df_adiant = pd.read_excel('Adiantamento a receber.xlsx')
     df_baixas = pd.read_excel('Baixas de adiantamentos a receber.xlsx')
 
     # Converter nomes de colunas para uppercase (compatibilidade)
-    df_contas.columns = [c.upper() for c in df_contas.columns]
-    df_adiant.columns = [c.upper() for c in df_adiant.columns]
-    df_baixas.columns = [c.upper() for c in df_baixas.columns]
+    df_contas.columns = [str(c).upper() for c in df_contas.columns]
+    df_adiant.columns = [str(c).upper() for c in df_adiant.columns]
+    df_baixas.columns = [str(c).upper() for c in df_baixas.columns]
 
     # Garantir que colunas de nome sejam string (evita erro de tipos mistos no Arrow)
     # NOME_CLIENTE

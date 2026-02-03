@@ -95,18 +95,48 @@ def render_navbar(pagina_atual: str = "pagar", mostrar_filtro_tempo: bool = True
     </style>
     """, unsafe_allow_html=True)
 
-    # Renderizar navbar HTML - Brand
-    st.markdown(f"""
-    <div class="navbar-container">
-        <div class="navbar-brand">
-            <div class="navbar-logo">GP</div>
-            <div>
-                <p class="navbar-title">Grupo Progresso</p>
-                <p class="navbar-subtitle">Dashboard Financeiro</p>
+    # Nome do usuario logado
+    nome_usuario = ""
+    if st.session_state.get('usuario'):
+        nome_usuario = st.session_state.usuario.get('nome', '').split()[0]
+
+    # Renderizar navbar HTML - Brand + Usuario
+    col_brand, col_user = st.columns([5, 1])
+
+    with col_brand:
+        st.markdown(f"""
+        <div class="navbar-container">
+            <div class="navbar-brand">
+                <div class="navbar-logo">GP</div>
+                <div>
+                    <p class="navbar-title">Grupo Progresso</p>
+                    <p class="navbar-subtitle">Dashboard Financeiro</p>
+                </div>
             </div>
+            {f'<div style="color: {cores["texto_secundario"]}; font-size: 0.8rem; font-weight: 500;">Ola, {nome_usuario}</div>' if nome_usuario else ''}
         </div>
-    </div>
-    """, unsafe_allow_html=True)
+        """, unsafe_allow_html=True)
+
+    with col_user:
+        if nome_usuario:
+            # Mostrar botao de admin se usuario for admin
+            from auth import is_admin
+            if is_admin():
+                col_admin, col_logout = st.columns(2)
+                with col_admin:
+                    if st.button("Usuarios", key="btn_admin_usuarios", type="secondary", use_container_width=True):
+                        st.session_state.admin_painel = True
+                        st.rerun()
+                with col_logout:
+                    if st.button("Sair", key="btn_logout", type="secondary", use_container_width=True):
+                        st.session_state.autenticado = False
+                        st.session_state.usuario = None
+                        st.rerun()
+            else:
+                if st.button("Sair", key="btn_logout", type="secondary", use_container_width=True):
+                    st.session_state.autenticado = False
+                    st.session_state.usuario = None
+                    st.rerun()
 
     # Linha com navegacao entre paginas (3 modulos principais)
     col_spacer, col_nav1, col_nav2, col_nav3, col_spacer2 = st.columns([2, 1.2, 1.2, 1.2, 2])

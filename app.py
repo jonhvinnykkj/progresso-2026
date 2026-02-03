@@ -13,6 +13,22 @@ warnings.filterwarnings('ignore')
 from config.settings import PAGE_CONFIG, INTERCOMPANY_PATTERNS
 st.set_page_config(**PAGE_CONFIG)
 
+from auth import verificar_autenticacao
+if not verificar_autenticacao():
+    st.stop()
+
+# Verificar se deve mostrar painel admin
+if st.session_state.get('admin_painel'):
+    from auth.admin import render_admin_usuarios
+    from config.theme import get_cores, get_css
+    st.markdown(get_css(), unsafe_allow_html=True)
+    # Botao voltar
+    if st.button("Voltar ao Dashboard", type="primary"):
+        st.session_state.admin_painel = False
+        st.rerun()
+    render_admin_usuarios()
+    st.stop()
+
 # Imports apos configuracao
 from datetime import datetime
 
