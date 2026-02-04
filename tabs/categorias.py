@@ -11,6 +11,7 @@ from config.theme import get_cores
 from components.charts import criar_layout
 from utils.formatters import formatar_moeda, formatar_numero
 from utils.data_helpers import get_df_pendentes, get_df_vencidos
+from config.settings import GRUPOS_FILIAIS, get_grupo_filial
 
 
 def render_categorias(df):
@@ -50,8 +51,8 @@ def render_categorias(df):
 
     st.divider()
 
-    # ========== VARIACAO PERIODO ==========
-    _render_variacao_periodo(df, cores)
+    # ========== PARETO / ABC ==========
+    _render_pareto_abc(df_cat, cores)
 
     st.divider()
 
@@ -385,93 +386,144 @@ def _render_evolucao_mensal(df, cores):
     st.plotly_chart(fig, use_container_width=True)
 
 
-def _render_variacao_periodo(df, cores):
-    """Variacao vs periodo anterior"""
+def _render_pareto_abc(df_cat, cores):
+    """Analise Pareto / Curva ABC de categorias"""
 
-    st.markdown("##### Variacao vs Periodo Anterior")
+    st.markdown("##### Analise ABC - Concentracao de Gastos")
 
-    hoje = datetime.now()
-
-    col1, col2 = st.columns([1, 3])
-
-    with col1:
-        periodo = st.selectbox(
-            "Comparar",
-            ['Ultimos 30 dias', 'Ultimos 90 dias', 'Ultimos 180 dias'],
-            key='var_periodo'
-        )
-
-    dias = {'Ultimos 30 dias': 30, 'Ultimos 90 dias': 90, 'Ultimos 180 dias': 180}[periodo]
-
-    df_atual = df[df['EMISSAO'] >= hoje - timedelta(days=dias)]
-    df_anterior = df[(df['EMISSAO'] >= hoje - timedelta(days=dias*2)) & (df['EMISSAO'] < hoje - timedelta(days=dias))]
-
-    if len(df_atual) == 0 or len(df_anterior) == 0:
-        st.info("Dados insuficientes para comparacao")
+    if len(df_cat) == 0:
+        st.info("Sem dados")
         return
 
-    atual_grp = df_atual.groupby('DESCRICAO')['VALOR_ORIGINAL'].sum()
-    anterior_grp = df_anterior.groupby('DESCRICAO')['VALOR_ORIGINAL'].sum()
+    df_pareto = df_cat[['Categoria', 'Total', 'Pendente', 'Qtd', 'Fornecedores']].copy()
+    df_pareto = df_pareto.sort_values('Total', ascending=False).reset_index(drop=True)
 
-    comparativo = pd.DataFrame({
-        'Atual': atual_grp,
-        'Anterior': anterior_grp
-    }).fillna(0)
-    comparativo['Variacao'] = comparativo['Atual'] - comparativo['Anterior']
-    comparativo['Pct'] = ((comparativo['Atual'] - comparativo['Anterior']) / comparativo['Anterior'].replace(0, 1)) * 100
+    total_geral = df_pareto['Total'].sum()
+    if total_geral == 0:
+        st.info("Sem valores para analise")
+        return
 
-    with col2:
-        tab1, tab2 = st.tabs(["Maior Crescimento", "Maior Reducao"])
+    df_pareto['Pct'] = df_pareto['Total'] / total_geral * 100
+    df_pareto['Acumulado'] = df_pareto['Pct'].cumsum()
 
-        with tab1:
-            df_cresc = comparativo[comparativo['Variacao'] > 0].nlargest(8, 'Variacao').reset_index()
-            df_cresc.columns = ['Categoria', 'Atual', 'Anterior', 'Variacao', 'Pct']
+    # Classificacao ABC
+    df_pareto['Classe'] = df_pareto['Acumulado'].apply(
+        lambda x: 'A' if x <= 80 else ('B' if x <= 95 else 'C')
+    )
+    # A primeira categoria que cruza o limiar fica na classe anterior
+    for i in range(len(df_pareto)):
+        if i == 0:
+            df_pareto.loc[i, 'Classe'] = 'A'
+        elif df_pareto.loc[i - 1, 'Acumulado'] < 80:
+            df_pareto.loc[i, 'Classe'] = 'A'
+        elif df_pareto.loc[i - 1, 'Acumulado'] < 95:
+            df_pareto.loc[i, 'Classe'] = 'B'
+        else:
+            df_pareto.loc[i, 'Classe'] = 'C'
 
-            if len(df_cresc) == 0:
-                st.info("Nenhuma categoria com crescimento")
-            else:
-                fig = go.Figure()
-                fig.add_trace(go.Bar(
-                    y=df_cresc['Categoria'].str[:25],
-                    x=df_cresc['Variacao'],
-                    orientation='h',
-                    marker_color=cores['sucesso'],
-                    text=[f"+{formatar_moeda(v)} ({p:+.0f}%)" for v, p in zip(df_cresc['Variacao'], df_cresc['Pct'])],
-                    textposition='outside',
-                    textfont=dict(size=9, color=cores['texto'])
-                ))
-                fig.update_layout(
-                    criar_layout(250),
-                    margin=dict(l=10, r=120, t=10, b=10),
-                    xaxis=dict(showticklabels=False, showgrid=False),
-                    yaxis=dict(tickfont=dict(size=9, color=cores['texto']), autorange='reversed')
-                )
-                st.plotly_chart(fig, use_container_width=True)
+    qtd_a = len(df_pareto[df_pareto['Classe'] == 'A'])
+    qtd_b = len(df_pareto[df_pareto['Classe'] == 'B'])
+    qtd_c = len(df_pareto[df_pareto['Classe'] == 'C'])
+    val_a = df_pareto[df_pareto['Classe'] == 'A']['Total'].sum()
+    val_b = df_pareto[df_pareto['Classe'] == 'B']['Total'].sum()
+    val_c = df_pareto[df_pareto['Classe'] == 'C']['Total'].sum()
 
-        with tab2:
-            df_queda = comparativo[comparativo['Variacao'] < 0].nsmallest(8, 'Variacao').reset_index()
-            df_queda.columns = ['Categoria', 'Atual', 'Anterior', 'Variacao', 'Pct']
+    # Cards ABC
+    st.markdown(f"""
+    <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.75rem; margin-bottom: 1rem;">
+        <div style="background: {cores['perigo']}15; border: 1px solid {cores['perigo']}50;
+                    border-radius: 10px; padding: 1rem; text-align: center;">
+            <p style="color: {cores['perigo']}; font-size: 1.4rem; font-weight: 700; margin: 0;">Classe A</p>
+            <p style="color: {cores['texto']}; font-size: 1.1rem; font-weight: 600; margin: 0.25rem 0;">
+                {qtd_a} categorias</p>
+            <p style="color: {cores['texto_secundario']}; font-size: 0.8rem; margin: 0;">
+                {formatar_moeda(val_a)} ({val_a/total_geral*100:.0f}% do total)</p>
+        </div>
+        <div style="background: {cores['alerta']}15; border: 1px solid {cores['alerta']}50;
+                    border-radius: 10px; padding: 1rem; text-align: center;">
+            <p style="color: {cores['alerta']}; font-size: 1.4rem; font-weight: 700; margin: 0;">Classe B</p>
+            <p style="color: {cores['texto']}; font-size: 1.1rem; font-weight: 600; margin: 0.25rem 0;">
+                {qtd_b} categorias</p>
+            <p style="color: {cores['texto_secundario']}; font-size: 0.8rem; margin: 0;">
+                {formatar_moeda(val_b)} ({val_b/total_geral*100:.0f}% do total)</p>
+        </div>
+        <div style="background: {cores['sucesso']}15; border: 1px solid {cores['sucesso']}50;
+                    border-radius: 10px; padding: 1rem; text-align: center;">
+            <p style="color: {cores['sucesso']}; font-size: 1.4rem; font-weight: 700; margin: 0;">Classe C</p>
+            <p style="color: {cores['texto']}; font-size: 1.1rem; font-weight: 600; margin: 0.25rem 0;">
+                {qtd_c} categorias</p>
+            <p style="color: {cores['texto_secundario']}; font-size: 0.8rem; margin: 0;">
+                {formatar_moeda(val_c)} ({val_c/total_geral*100:.0f}% do total)</p>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
 
-            if len(df_queda) == 0:
-                st.info("Nenhuma categoria com reducao")
-            else:
-                fig = go.Figure()
-                fig.add_trace(go.Bar(
-                    y=df_queda['Categoria'].str[:25],
-                    x=df_queda['Variacao'].abs(),
-                    orientation='h',
-                    marker_color=cores['perigo'],
-                    text=[f"-{formatar_moeda(abs(v))} ({p:.0f}%)" for v, p in zip(df_queda['Variacao'], df_queda['Pct'])],
-                    textposition='outside',
-                    textfont=dict(size=9, color=cores['texto'])
-                ))
-                fig.update_layout(
-                    criar_layout(250),
-                    margin=dict(l=10, r=120, t=10, b=10),
-                    xaxis=dict(showticklabels=False, showgrid=False),
-                    yaxis=dict(tickfont=dict(size=9, color=cores['texto']), autorange='reversed')
-                )
-                st.plotly_chart(fig, use_container_width=True)
+    # Grafico Pareto (top 20 para nao poluir)
+    df_plot = df_pareto.head(20)
+
+    cor_classe = {'A': cores['perigo'], 'B': cores['alerta'], 'C': cores['sucesso']}
+    bar_colors = [cor_classe[c] for c in df_plot['Classe']]
+
+    fig = go.Figure()
+
+    # Barras de valor
+    fig.add_trace(go.Bar(
+        x=df_plot['Categoria'].str[:18],
+        y=df_plot['Total'],
+        name='Valor',
+        marker_color=bar_colors,
+        text=[formatar_moeda(v) for v in df_plot['Total']],
+        textposition='outside',
+        textfont=dict(size=8, color=cores['texto']),
+        yaxis='y'
+    ))
+
+    # Linha acumulada
+    fig.add_trace(go.Scatter(
+        x=df_plot['Categoria'].str[:18],
+        y=df_plot['Acumulado'],
+        name='% Acumulado',
+        mode='lines+markers+text',
+        line=dict(color=cores['texto'], width=2),
+        marker=dict(size=5),
+        text=[f"{v:.0f}%" for v in df_plot['Acumulado']],
+        textposition='top center',
+        textfont=dict(size=8, color=cores['texto']),
+        yaxis='y2'
+    ))
+
+    # Linhas de referencia 80% e 95%
+    fig.add_hline(y=80, line_dash="dot", line_color=cores['perigo'], line_width=1,
+                  annotation_text="80% (A)", annotation_position="right",
+                  annotation_font=dict(size=9, color=cores['perigo']),
+                  yref='y2')
+    fig.add_hline(y=95, line_dash="dot", line_color=cores['alerta'], line_width=1,
+                  annotation_text="95% (B)", annotation_position="right",
+                  annotation_font=dict(size=9, color=cores['alerta']),
+                  yref='y2')
+
+    fig.update_layout(
+        criar_layout(350),
+        margin=dict(l=10, r=50, t=10, b=80),
+        xaxis=dict(tickangle=-45, tickfont=dict(size=8, color=cores['texto'])),
+        yaxis=dict(showticklabels=False, showgrid=False, title=None),
+        yaxis2=dict(overlaying='y', side='right', range=[0, 105], showgrid=False,
+                    tickfont=dict(size=9, color=cores['texto']), title=None),
+        legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='right', x=1,
+                    font=dict(size=9, color=cores['texto'])),
+        showlegend=True
+    )
+
+    st.plotly_chart(fig, use_container_width=True)
+
+    # Tabela resumo ABC
+    with st.expander("Ver detalhes da classificacao ABC"):
+        df_abc = df_pareto[['Categoria', 'Total', 'Pct', 'Acumulado', 'Classe', 'Qtd', 'Fornecedores']].copy()
+        df_abc['Total'] = df_abc['Total'].apply(formatar_moeda)
+        df_abc['Pct'] = df_abc['Pct'].apply(lambda x: f"{x:.1f}%")
+        df_abc['Acumulado'] = df_abc['Acumulado'].apply(lambda x: f"{x:.1f}%")
+        df_abc.columns = ['Categoria', 'Valor', '% Individual', '% Acumulado', 'Classe', 'Titulos', 'Fornecedores']
+        st.dataframe(df_abc, use_container_width=True, hide_index=True, height=400)
 
 
 def _render_sazonalidade(df, cores):
@@ -569,10 +621,21 @@ def _render_sazonalidade(df, cores):
             col_b.caption(f"📉 Baixas: {', '.join(meses_baixa)}")
 
 
+def _get_nome_grupo_cat(cod_filial):
+    grupo_id = get_grupo_filial(int(cod_filial))
+    return GRUPOS_FILIAIS.get(grupo_id, f"Grupo {grupo_id}")
+
+def _detectar_multiplos_grupos_cat(df):
+    if 'FILIAL' not in df.columns or len(df) == 0:
+        return False
+    grupos = df['FILIAL'].dropna().apply(lambda x: get_grupo_filial(int(x))).nunique()
+    return grupos > 1
+
+
 def _render_matriz_filial_categoria(df, cores):
     """Matriz Filial x Categoria (Heatmap)"""
 
-    st.markdown("##### Matriz Filial x Categoria")
+    multiplos = _detectar_multiplos_grupos_cat(df)
 
     # Top 10 categorias
     top10_cat = df.groupby('DESCRICAO')['VALOR_ORIGINAL'].sum().nlargest(10).index.tolist()
@@ -584,13 +647,26 @@ def _render_matriz_filial_categoria(df, cores):
     # Filtrar e criar pivot
     df_matriz = df[df['DESCRICAO'].isin(top10_cat)].copy()
 
-    pivot = df_matriz.pivot_table(
-        values='VALOR_ORIGINAL',
-        index='NOME_FILIAL',
-        columns='DESCRICAO',
-        aggfunc='sum',
-        fill_value=0
-    )
+    if multiplos:
+        st.markdown("##### Matriz Grupo x Categoria")
+        df_matriz['GRUPO'] = df_matriz['FILIAL'].apply(lambda x: _get_nome_grupo_cat(x))
+        pivot = df_matriz.pivot_table(
+            values='VALOR_ORIGINAL',
+            index='GRUPO',
+            columns='DESCRICAO',
+            aggfunc='sum',
+            fill_value=0
+        )
+    else:
+        st.markdown("##### Matriz Filial x Categoria")
+        df_matriz['FILIAL_LABEL'] = df_matriz['FILIAL'].astype(int).astype(str) + ' - ' + df_matriz['NOME_FILIAL'].str.split(' - ').str[-1].str.strip()
+        pivot = df_matriz.pivot_table(
+            values='VALOR_ORIGINAL',
+            index='FILIAL_LABEL',
+            columns='DESCRICAO',
+            aggfunc='sum',
+            fill_value=0
+        )
 
     if pivot.empty:
         st.info("Dados insuficientes para matriz")
@@ -963,14 +1039,27 @@ def _render_busca_categoria(df, df_pagos, df_vencidos, cores):
             st.plotly_chart(fig, use_container_width=True)
 
     with tab2:
-        df_fil = df_sel.groupby('NOME_FILIAL').agg({
-            'VALOR_ORIGINAL': 'sum',
-            'SALDO': 'sum'
-        }).reset_index()
+        multiplos_busca = _detectar_multiplos_grupos_cat(df_sel)
+        if multiplos_busca:
+            df_fil = df_sel.copy()
+            df_fil['GRUPO'] = df_fil['FILIAL'].apply(lambda x: _get_nome_grupo_cat(x))
+            df_fil = df_fil.groupby('GRUPO').agg({
+                'VALOR_ORIGINAL': 'sum',
+                'SALDO': 'sum'
+            }).reset_index()
+            pie_labels = df_fil['GRUPO']
+        else:
+            df_fil = df_sel.copy()
+            df_fil['FILIAL_LABEL'] = df_fil['FILIAL'].astype(int).astype(str) + ' - ' + df_fil['NOME_FILIAL'].str.split(' - ').str[-1].str.strip()
+            df_fil = df_fil.groupby('FILIAL_LABEL').agg({
+                'VALOR_ORIGINAL': 'sum',
+                'SALDO': 'sum'
+            }).reset_index()
+            pie_labels = df_fil['FILIAL_LABEL']
 
         if len(df_fil) > 0:
             fig = go.Figure(go.Pie(
-                labels=df_fil['NOME_FILIAL'],
+                labels=pie_labels,
                 values=df_fil['VALOR_ORIGINAL'],
                 hole=0.4,
                 textinfo='percent+label',
@@ -984,7 +1073,7 @@ def _render_busca_categoria(df, df_pagos, df_vencidos, cores):
             st.plotly_chart(fig, use_container_width=True)
 
     with tab3:
-        colunas = ['NOME_FILIAL', 'NOME_FORNECEDOR', 'EMISSAO', 'VENCIMENTO', 'DT_BAIXA', 'DIAS_PARA_PAGAR', 'VALOR_ORIGINAL', 'SALDO', 'STATUS']
+        colunas = ['NOME_FILIAL', 'NOME_FORNECEDOR', 'NUMERO', 'EMISSAO', 'VENCIMENTO', 'DT_BAIXA', 'DIAS_PARA_PAGAR', 'VALOR_ORIGINAL', 'SALDO', 'STATUS']
         colunas_disp = [c for c in colunas if c in df_sel.columns]
         df_tab = df_sel[colunas_disp].nlargest(50, 'VALOR_ORIGINAL').copy()
 
@@ -1002,6 +1091,7 @@ def _render_busca_categoria(df, df_pagos, df_vencidos, cores):
         nomes = {
             'NOME_FILIAL': 'Filial',
             'NOME_FORNECEDOR': 'Fornecedor',
+            'NUMERO': 'NF/Doc',
             'EMISSAO': 'Emissao',
             'VENCIMENTO': 'Vencimento',
             'DT_BAIXA': 'Dt Pagto',

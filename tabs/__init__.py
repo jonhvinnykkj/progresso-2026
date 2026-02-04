@@ -2,12 +2,10 @@ from .visao_geral import render_visao_geral
 from .vencimentos import render_vencimentos
 from .fornecedores import render_fornecedores
 from .categorias import render_categorias
-from .evolucao import render_evolucao
-from .filiais import render_filiais
 from .adiantamentos import render_adiantamentos
 from .detalhes import render_detalhes
-from .analise_avancada import render_analise_avancada
 from .bancos import render_bancos
 from .juros_cambio import render_juros_cambio
 from .formas_pagamento import render_formas_pagamento
-from .cambio import render_cambio
+from .tipo_documento import render_tipo_documento
+from .intercompany_unified import render_intercompany_unificado

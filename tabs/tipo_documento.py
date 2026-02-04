@@ -22,6 +22,7 @@ TIPOS_DESC = {
     'NCF': 'Nota de Credito Fornecedor',
     'RC': 'Recibo',
     'FT': 'Fatura',
+    'FAT': 'Faturamento (excluido)',
     'PR': 'Provisao',
     'OP': 'Ordem de Pagamento',
     'TX': 'Taxa',

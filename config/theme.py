@@ -4,22 +4,25 @@ Tema e estilos do dashboard
 import streamlit as st
 
 
+_CORES = {
+    'primaria': '#00873D',
+    'primaria_escura': '#005A28',
+    'secundaria': '#3b82f6',
+    'sucesso': '#22c55e',
+    'alerta': '#f59e0b',
+    'perigo': '#ef4444',
+    'info': '#3b82f6',
+    'fundo': '#0f172a',
+    'card': '#1e293b',
+    'borda': '#334155',
+    'texto': '#f1f5f9',
+    'texto_secundario': '#94a3b8'
+}
+
+
 def get_cores():
     """Retorna esquema de cores do tema escuro"""
-    return {
-        'primaria': '#00873D',
-        'primaria_escura': '#005A28',
-        'secundaria': '#3b82f6',
-        'sucesso': '#22c55e',
-        'alerta': '#f59e0b',
-        'perigo': '#ef4444',
-        'info': '#3b82f6',
-        'fundo': '#0f172a',
-        'card': '#1e293b',
-        'borda': '#334155',
-        'texto': '#f1f5f9',
-        'texto_secundario': '#94a3b8'
-    }
+    return _CORES
 
 
 def get_sequencia_cores():

@@ -11,9 +11,10 @@ PAGE_CONFIG = {
 
 # Arquivos de dados
 DATA_FILES = {
-    "contas": "Contas a Pagar.xlsx",
-    "adiantamentos": "Adiantamentos a pagar.xlsx",
-    "baixas": "Baixas de adiantamentos a pagar.xlsx"
+    "contas_pagar": "data/Contas a Pagar.xlsx",
+    "contas_receber": "data/Contas a receber.xlsx",
+    "baixas_pagar": "data/Baixas de adiantamentos a pagar.xlsx",
+    "baixas_receber": "data/Baixas de adiantamentos a receber.xlsx",
 }
 
 # Configurações de cache
@@ -27,6 +28,64 @@ MESES_NOMES = {
 }
 
 # Opções de período rápido
+# Mapeamento de grupos de filiais (prefixo centenário)
+GRUPOS_FILIAIS = {
+    1: "Agricola",
+    2: "Agroindustrial",
+    3: "Brasil Agricola",
+    4: "Agricola",          # Tropical pertence ao grupo Agricola
+    5: "Agricola",          # FBO pertence ao grupo Agricola
+    6: "AG3",
+    7: "CG3",
+    8: "SDS",
+}
+
+# Prefixos longos a remover dos nomes de subfiliais para exibicao curta
+_PREFIXOS_SUBFILIAL = [
+    'PROGRESSO AGROINDUSTRIAL - ',
+    'PROGRESSO AGROINDUSTRIAL',
+    'PROGRESSO AGRICOLA - ',
+    'PROGRESSO AGRICOLA',
+    'BRASIL AGRICOLA LTDA - ',
+    'BRASIL AGRICOLA LTDA',
+    'TROPICAL AGROPARTICIPACOES - ',
+    'TROPICAL AGROPARTICIPACOES',
+    'PROGRESSO FBO - ',
+    'PROGRESSO FBO',
+    'AG3 AGRO - ',
+    'AG3 AGRO',
+    'CG3 AGRO - ',
+    'CG3 AGRO',
+    'SDS PARTICIPACOES - ',
+    'SDS PARTICIPACOES',
+]
+
+
+def abreviar_nome_subfilial(nome):
+    """Remove o prefixo do grupo do nome da subfilial para exibicao curta.
+    Ex: 'PROGRESSO AGROINDUSTRIAL - BA' -> 'BA'
+        'PROGRESSO MATRIZ' -> 'MATRIZ'
+    """
+    nome_upper = str(nome).strip().upper()
+    for prefixo in _PREFIXOS_SUBFILIAL:
+        if nome_upper.startswith(prefixo):
+            resto = nome_upper[len(prefixo):].strip()
+            if resto:
+                return resto
+    # Se nao encontrou prefixo, retorna o nome original
+    return str(nome).strip()
+
+
+def get_grupo_filial(cod_filial):
+    """Retorna o prefixo centenario (1, 2, 3...) de um codigo de filial"""
+    return cod_filial // 100
+
+
+# Tipos de documento excluidos dos totalizadores (duplicam valores)
+# FAT = Faturamento (duplica NF)
+# PR  = Provisao de contratos (pendente validacao com Fernando)
+TIPOS_EXCLUIDOS = ['FAT']
+
 OPCOES_PERIODO_RAPIDO = [
     'Todos os dados', 'Hoje', 'Últimos 7 dias', 'Últimos 30 dias',
     'Últimos 90 dias', 'Este mês', 'Mês passado', 'Este ano'

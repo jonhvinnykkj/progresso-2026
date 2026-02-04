@@ -6,6 +6,7 @@ from sqlalchemy import create_engine, text
 from dotenv import load_dotenv
 import os
 from datetime import datetime
+import streamlit as st
 
 from auth.security import gerar_hash_senha, verificar_senha, validar_forca_senha
 
@@ -14,9 +15,10 @@ load_dotenv()
 DATABASE_URL = os.getenv('DATABASE_URL')
 
 
+@st.cache_resource
 def _get_engine():
-    """Cria engine de conexao com o banco"""
-    return create_engine(DATABASE_URL)
+    """Cria engine de conexao (singleton por sessao do Streamlit)"""
+    return create_engine(DATABASE_URL, pool_pre_ping=True)
 
 
 def criar_tabela_usuarios():

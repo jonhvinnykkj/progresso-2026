@@ -226,12 +226,12 @@ def _aplicar_filtros(df):
     # Vencimento de
     venc_inicio = st.session_state.get('det_venc_inicio')
     if venc_inicio:
-        df_filtrado = df_filtrado[df_filtrado['VENCIMENTO'].dt.date >= venc_inicio]
+        df_filtrado = df_filtrado[df_filtrado['VENCIMENTO'] >= pd.Timestamp(venc_inicio)]
 
     # Vencimento ate
     venc_fim = st.session_state.get('det_venc_fim')
     if venc_fim:
-        df_filtrado = df_filtrado[df_filtrado['VENCIMENTO'].dt.date <= venc_fim]
+        df_filtrado = df_filtrado[df_filtrado['VENCIMENTO'] <= pd.Timestamp(venc_fim)]
 
     return df_filtrado.sort_values('VENCIMENTO', ascending=True)
 

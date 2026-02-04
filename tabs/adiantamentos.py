@@ -8,7 +8,7 @@ import plotly.graph_objects as go
 from datetime import datetime, timedelta
 
 from config.theme import get_cores
-from config.settings import INTERCOMPANY_PATTERNS
+from config.settings import INTERCOMPANY_PATTERNS, GRUPOS_FILIAIS, get_grupo_filial, abreviar_nome_subfilial
 from components.charts import criar_layout
 from utils.formatters import formatar_moeda, formatar_numero
 
@@ -116,6 +116,12 @@ def _preparar_dados(df_adiant, df_baixas, hoje):
             '|'.join(INTERCOMPANY_PATTERNS), na=False, regex=True
         )
         df_bx = df_bx[~mask_ic].copy()
+
+    # Correlacionar baixas com adiantamentos (so manter baixas que tem adiantamento correspondente)
+    if len(df_ad) > 0 and len(df_bx) > 0 and 'FILIAL' in df_ad.columns and 'NUMERO' in df_ad.columns:
+        chaves_ad = set(zip(df_ad['FILIAL'], df_ad['NUMERO'].astype(str)))
+        mask_match = df_bx.apply(lambda r: (r['FILIAL'], str(r['NUMERO'])) in chaves_ad, axis=1)
+        df_bx = df_bx[mask_match].copy()
 
     # Converter datas
     if len(df_ad) > 0:
@@ -912,7 +918,7 @@ def _render_por_tipo(df_ad, df_bx, cores):
                 st.info("Sem dados de filial")
 
         with tab3:
-            colunas = ['NOME_FILIAL', 'NOME_FORNECEDOR', 'EMISSAO', 'VALOR_ORIGINAL', 'SALDO']
+            colunas = ['NOME_FILIAL', 'NOME_FORNECEDOR', 'NUMERO', 'EMISSAO', 'VALOR_ORIGINAL', 'SALDO']
             colunas_disp = [c for c in colunas if c in df_sel.columns]
             df_tab = df_sel[colunas_disp].nlargest(30, 'VALOR_ORIGINAL').copy()
 
@@ -925,6 +931,7 @@ def _render_por_tipo(df_ad, df_bx, cores):
             nomes = {
                 'NOME_FILIAL': 'Filial',
                 'NOME_FORNECEDOR': 'Fornecedor',
+                'NUMERO': 'NF/Doc',
                 'EMISSAO': 'Emissao',
                 'VALOR_ORIGINAL': 'Valor',
                 'SALDO': 'Saldo'
@@ -962,6 +969,20 @@ def _render_por_tipo(df_ad, df_bx, cores):
     )
 
 
+def _get_nome_grupo(cod_filial):
+    """Retorna o nome legivel do grupo a que pertence a filial."""
+    grupo_id = get_grupo_filial(int(cod_filial))
+    return GRUPOS_FILIAIS.get(grupo_id, f"Grupo {grupo_id}")
+
+
+def _detectar_multiplos_grupos(df):
+    """Verifica se o DataFrame contem filiais de mais de um grupo."""
+    if "FILIAL" not in df.columns or len(df) == 0:
+        return False
+    grupos = df["FILIAL"].dropna().apply(lambda x: get_grupo_filial(int(x))).nunique()
+    return grupos > 1
+
+
 def _render_por_filial(df_ad, df_bx, cores):
     """Analise por filial - versao completa"""
 
@@ -971,8 +992,26 @@ def _render_por_filial(df_ad, df_bx, cores):
 
     hoje = datetime.now()
 
-    # Agrupar por filial
-    df_fil = df_ad.groupby('NOME_FILIAL').agg({
+    # --- Detectar se ha multiplos grupos ---
+    multiplos_grupos = _detectar_multiplos_grupos(df_ad)
+
+    if multiplos_grupos:
+        # Agrupar por GRUPO
+        st.markdown("##### Por Grupo")
+        df_ad = df_ad.copy()
+        df_ad['_GRUPO'] = df_ad['FILIAL'].apply(lambda x: _get_nome_grupo(x))
+        col_agrup = '_GRUPO'
+    else:
+        # Agrupar por FILIAL (codigo + nome abreviado)
+        st.markdown("##### Por Filial")
+        df_ad = df_ad.copy()
+        df_ad['_FILIAL_LABEL'] = df_ad.apply(
+            lambda r: f"{int(r['FILIAL'])} - {abreviar_nome_subfilial(r['NOME_FILIAL'])}", axis=1
+        )
+        col_agrup = '_FILIAL_LABEL'
+
+    # Agrupar
+    df_fil = df_ad.groupby(col_agrup).agg({
         'VALOR_ORIGINAL': 'sum',
         'SALDO': 'sum',
         'NUMERO': 'count',
@@ -984,12 +1023,22 @@ def _render_por_filial(df_ad, df_bx, cores):
     df_fil['Ticket_Medio'] = (df_fil['Total'] / df_fil['Qtd']).fillna(0)
     df_fil = df_fil.sort_values('Total', ascending=False)
 
-    # Adicionar prazo medio por filial
+    # Adicionar prazo medio por filial/grupo
     if len(df_bx) > 0 and 'NOME_FILIAL' in df_bx.columns and 'DIF_DIAS_EMIS_BAIXA' in df_bx.columns:
-        prazo_fil = df_bx.groupby('NOME_FILIAL')['DIF_DIAS_EMIS_BAIXA'].apply(
-            lambda x: pd.to_numeric(x, errors='coerce').mean()
-        )
-        df_fil['Prazo_Medio'] = df_fil['Filial'].map(prazo_fil).fillna(0)
+        df_bx_temp = df_bx.copy()
+        if multiplos_grupos:
+            df_bx_temp['_GRUPO'] = df_bx_temp['FILIAL'].apply(lambda x: _get_nome_grupo(x))
+            prazo_map = df_bx_temp.groupby('_GRUPO')['DIF_DIAS_EMIS_BAIXA'].apply(
+                lambda x: pd.to_numeric(x, errors='coerce').mean()
+            )
+        else:
+            df_bx_temp['_FILIAL_LABEL'] = df_bx_temp.apply(
+                lambda r: f"{int(r['FILIAL'])} - {abreviar_nome_subfilial(r['NOME_FILIAL'])}", axis=1
+            )
+            prazo_map = df_bx_temp.groupby('_FILIAL_LABEL')['DIF_DIAS_EMIS_BAIXA'].apply(
+                lambda x: pd.to_numeric(x, errors='coerce').mean()
+            )
+        df_fil['Prazo_Medio'] = df_fil['Filial'].map(prazo_map).fillna(0)
     else:
         df_fil['Prazo_Medio'] = 0
 
@@ -1007,13 +1056,13 @@ def _render_por_filial(df_ad, df_bx, cores):
     col1, col2, col3, col4, col5 = st.columns(5)
 
     col1.metric("Filiais", qtd_filiais, f"{df_fil['Qtd'].sum()} titulos")
-    col2.metric("Maior Volume", maior_filial[:15], formatar_moeda(maior_filial_valor))
-    col3.metric("Mais Pendente", df_fil.nlargest(1, 'Pendente').iloc[0]['Filial'][:15] if len(df_fil) > 0 else '-',
+    col2.metric("Maior Volume", maior_filial[:25], formatar_moeda(maior_filial_valor))
+    col3.metric("Mais Pendente", df_fil.nlargest(1, 'Pendente').iloc[0]['Filial'][:25] if len(df_fil) > 0 else '-',
                 formatar_moeda(df_fil.nlargest(1, 'Pendente').iloc[0]['Pendente']) if len(df_fil) > 0 else 'R$ 0')
     col4.metric("Melhor Taxa", f"{melhor_taxa_fil['Pct_Comp']:.0f}%" if melhor_taxa_fil is not None else '-',
-                melhor_taxa_fil['Filial'][:12] if melhor_taxa_fil is not None else '')
+                melhor_taxa_fil['Filial'][:25] if melhor_taxa_fil is not None else '')
     col5.metric("Pior Taxa", f"{pior_taxa_fil['Pct_Comp']:.0f}%" if pior_taxa_fil is not None else '-',
-                pior_taxa_fil['Filial'][:12] if pior_taxa_fil is not None else '')
+                pior_taxa_fil['Filial'][:25] if pior_taxa_fil is not None else '')
 
     st.divider()
 
@@ -1103,13 +1152,13 @@ def _render_por_filial(df_ad, df_bx, cores):
 
     top5_filiais = df_fil.head(5)['Filial'].tolist()
 
-    df_evol = df_ad[df_ad['NOME_FILIAL'].isin(top5_filiais)].copy()
+    df_evol = df_ad[df_ad[col_agrup].isin(top5_filiais)].copy()
     df_evol['MES'] = df_evol['EMISSAO'].dt.to_period('M').astype(str)
 
     df_pivot = df_evol.pivot_table(
         values='VALOR_ORIGINAL',
         index='MES',
-        columns='NOME_FILIAL',
+        columns=col_agrup,
         aggfunc='sum',
         fill_value=0
     ).reset_index()
@@ -1236,8 +1285,8 @@ def _render_por_filial(df_ad, df_bx, cores):
     df_anterior = df_ad[(df_ad['EMISSAO'] >= hoje - timedelta(days=180)) & (df_ad['EMISSAO'] < hoje - timedelta(days=90))]
 
     if len(df_atual) > 0 and len(df_anterior) > 0:
-        atual_grp = df_atual.groupby('NOME_FILIAL')['VALOR_ORIGINAL'].sum()
-        anterior_grp = df_anterior.groupby('NOME_FILIAL')['VALOR_ORIGINAL'].sum()
+        atual_grp = df_atual.groupby(col_agrup)['VALOR_ORIGINAL'].sum()
+        anterior_grp = df_anterior.groupby(col_agrup)['VALOR_ORIGINAL'].sum()
 
         df_var = pd.DataFrame({
             'Atual': atual_grp,
@@ -1295,11 +1344,11 @@ def _render_por_filial(df_ad, df_bx, cores):
         # Top 10 filiais
         top10_fil = df_fil.head(10)['Filial'].tolist()
 
-        df_matriz = df_ad[df_ad['NOME_FILIAL'].isin(top10_fil)].copy()
+        df_matriz = df_ad[df_ad[col_agrup].isin(top10_fil)].copy()
 
         pivot = df_matriz.pivot_table(
             values='VALOR_ORIGINAL',
-            index='NOME_FILIAL',
+            index=col_agrup,
             columns='TIPO_ADTO',
             aggfunc='sum',
             fill_value=0
@@ -1339,7 +1388,7 @@ def _render_por_filial(df_ad, df_bx, cores):
     filial_sel = st.selectbox("Selecione uma filial", options=[""] + df_fil['Filial'].tolist(), key="filial_consulta")
 
     if filial_sel:
-        df_sel = df_ad[df_ad['NOME_FILIAL'] == filial_sel]
+        df_sel = df_ad[df_ad[col_agrup] == filial_sel]
         df_pend_sel = df_sel[df_sel['SALDO'] > 0]
 
         # Metricas da filial
@@ -1352,7 +1401,7 @@ def _render_por_filial(df_ad, df_bx, cores):
         # Prazo medio da filial
         prazo_fil = 0
         if len(df_bx) > 0 and 'NOME_FILIAL' in df_bx.columns:
-            df_bx_fil = df_bx[df_bx['NOME_FILIAL'] == filial_sel]
+            df_bx_fil = df_bx[df_bx[col_agrup] == filial_sel]
             if len(df_bx_fil) > 0 and 'DIF_DIAS_EMIS_BAIXA' in df_bx_fil.columns:
                 prazo_fil = pd.to_numeric(df_bx_fil['DIF_DIAS_EMIS_BAIXA'], errors='coerce').mean()
         col5.metric("Prazo Medio", f"{prazo_fil:.0f}d" if prazo_fil > 0 else "-")
@@ -1416,7 +1465,7 @@ def _render_por_filial(df_ad, df_bx, cores):
                 st.info("Sem dados de tipo")
 
         with tab3:
-            colunas = ['NOME_FORNECEDOR', 'TIPO_ADTO', 'EMISSAO', 'VALOR_ORIGINAL', 'SALDO']
+            colunas = ['NOME_FORNECEDOR', 'NUMERO', 'TIPO_ADTO', 'EMISSAO', 'VALOR_ORIGINAL', 'SALDO']
             colunas_disp = [c for c in colunas if c in df_sel.columns]
             df_tab = df_sel[colunas_disp].nlargest(30, 'VALOR_ORIGINAL').copy()
 
@@ -1428,6 +1477,7 @@ def _render_por_filial(df_ad, df_bx, cores):
 
             nomes = {
                 'NOME_FORNECEDOR': 'Fornecedor',
+                'NUMERO': 'NF/Doc',
                 'TIPO_ADTO': 'Tipo',
                 'EMISSAO': 'Emissao',
                 'VALOR_ORIGINAL': 'Valor',
@@ -2988,7 +3038,7 @@ def _render_aging(df_ad, cores, hoje):
     df_tab = df_tab.head(100)
 
     # Preparar para exibicao
-    colunas = ['NOME_FILIAL', 'NOME_FORNECEDOR', 'DESCRICAO', 'EMISSAO', 'DIAS_PENDENTE', 'VALOR_ORIGINAL', 'SALDO', 'FAIXA_AGING', 'SCORE_RISCO']
+    colunas = ['NOME_FILIAL', 'NOME_FORNECEDOR', 'NUMERO', 'DESCRICAO', 'EMISSAO', 'DIAS_PENDENTE', 'VALOR_ORIGINAL', 'SALDO', 'FAIXA_AGING', 'SCORE_RISCO']
     colunas_disp = [c for c in colunas if c in df_tab.columns]
     df_show = df_tab[colunas_disp].copy()
 
@@ -3007,6 +3057,7 @@ def _render_aging(df_ad, cores, hoje):
     nomes = {
         'NOME_FILIAL': 'Filial',
         'NOME_FORNECEDOR': 'Fornecedor',
+        'NUMERO': 'NF/Doc',
         'DESCRICAO': 'Tipo',
         'EMISSAO': 'Emissao',
         'DIAS_PENDENTE': 'Dias',

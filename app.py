@@ -10,23 +10,11 @@ import warnings
 warnings.filterwarnings('ignore')
 
 # Configuracao da pagina (deve ser a primeira chamada Streamlit)
-from config.settings import PAGE_CONFIG, INTERCOMPANY_PATTERNS
+from config.settings import PAGE_CONFIG, INTERCOMPANY_PATTERNS, TIPOS_EXCLUIDOS, CACHE_TTL
 st.set_page_config(**PAGE_CONFIG)
 
 from auth import verificar_autenticacao
 if not verificar_autenticacao():
-    st.stop()
-
-# Verificar se deve mostrar painel admin
-if st.session_state.get('admin_painel'):
-    from auth.admin import render_admin_usuarios
-    from config.theme import get_cores, get_css
-    st.markdown(get_css(), unsafe_allow_html=True)
-    # Botao voltar
-    if st.button("Voltar ao Dashboard", type="primary"):
-        st.session_state.admin_painel = False
-        st.rerun()
-    render_admin_usuarios()
     st.stop()
 
 # Imports apos configuracao
@@ -68,8 +56,45 @@ def fragment_formas_pagamento(df):
     render_formas_pagamento(df)
 
 @st.fragment
+def fragment_tipo_documento(df):
+    render_tipo_documento(df)
+
+@st.fragment
 def fragment_detalhes(df):
     render_detalhes(df)
+
+
+PADROES_CUSTOS_FINANCEIROS = ['TAXA', 'JUROS', 'BANC', 'EMPRESTIMO', 'MULTA CONTRATUAL', 'IOF', 'ENCARGO']
+
+
+@st.cache_data(ttl=CACHE_TTL)
+def _preparar_dados_pagar(_df_contas):
+    """Pre-processa dados: remove intercompany, extrai adiantamentos e custos financeiros"""
+    # Excluir fornecedores Intercompany dos dados principais
+    mask_intercompany = _df_contas['NOME_FORNECEDOR'].str.upper().str.contains(
+        '|'.join(INTERCOMPANY_PATTERNS), na=False, regex=True
+    )
+    df_sem_ic = _df_contas[~mask_intercompany]
+
+    # Excluir tipos que duplicam valores (FAT, etc.)
+    if 'TIPO' in df_sem_ic.columns and TIPOS_EXCLUIDOS:
+        df_sem_ic = df_sem_ic[~df_sem_ic['TIPO'].str.strip().isin(TIPOS_EXCLUIDOS)]
+
+    # Extrair adiantamentos (TIPO=PA ou DESCRICAO contendo ADTO/ADIANT)
+    mask_tipo_adto = df_sem_ic['TIPO'].isin(['PA', 'ADI'])
+    mask_desc_adto = df_sem_ic['DESCRICAO'].str.upper().str.contains('ADTO|ADIANT', na=False, regex=True)
+    mask_adiantamento = mask_tipo_adto | mask_desc_adto
+    df_adiantamentos = df_sem_ic[mask_adiantamento]
+    df_sem_adto = df_sem_ic[~mask_adiantamento]
+
+    # Separar custos financeiros/bancos
+    mask_custos_fin = df_sem_adto['DESCRICAO'].str.upper().str.contains(
+        '|'.join(PADROES_CUSTOS_FINANCEIROS), na=False, regex=True
+    )
+    df_custos_financeiros = df_sem_adto[mask_custos_fin]
+    df_contas_sem_ic = df_sem_adto[~mask_custos_fin]
+
+    return df_contas_sem_ic, df_custos_financeiros, df_adiantamentos
 
 
 def main():
@@ -85,32 +110,17 @@ def main():
     st.markdown(get_css(), unsafe_allow_html=True)
 
     # Carregar dados PRIMEIRO para obter opcoes de filiais
-    df_contas, df_adiant, df_baixas = carregar_dados()
+    df_contas, df_baixas = carregar_dados()
 
-    # Excluir fornecedores Intercompany dos dados principais (ANTES de tudo)
-    # Padroes importados de config/settings.py (fonte unica)
-    mask_intercompany = df_contas['NOME_FORNECEDOR'].str.upper().str.contains('|'.join(INTERCOMPANY_PATTERNS), na=False, regex=True)
-    df_contas_sem_ic = df_contas[~mask_intercompany].copy()
-
-    # Separar adiantamentos (ADTO FORNECEDOR, etc.) das contas normais
-    # OBS: Os ADTO de Contas a Pagar ja estao em Adiantamentos a pagar.xlsx (98.6% duplicados)
-    # Por isso, removemos de Contas a Pagar para evitar duplicacao
-    mask_adiantamento = df_contas_sem_ic['DESCRICAO'].str.upper().str.contains('ADTO|ADIANT', na=False, regex=True)
-    df_contas_sem_ic = df_contas_sem_ic[~mask_adiantamento].copy()    # Contas normais (sem adiantamentos)
-
-    # Separar custos financeiros/bancos (TAXAS, EMPRESTIMOS, JUROS, etc.)
-    # Esses registros vao para a aba "Custos Financeiros"
-    PADROES_CUSTOS_FINANCEIROS = ['TAXA', 'JUROS', 'BANC', 'EMPRESTIMO', 'MULTA CONTRATUAL', 'IOF', 'ENCARGO']
-    mask_custos_fin = df_contas_sem_ic['DESCRICAO'].str.upper().str.contains('|'.join(PADROES_CUSTOS_FINANCEIROS), na=False, regex=True)
-    df_custos_financeiros = df_contas_sem_ic[mask_custos_fin].copy()  # Apenas bancos/custos financeiros
-    df_contas_sem_ic = df_contas_sem_ic[~mask_custos_fin].copy()      # Contas normais (sem bancos)
+    # Pre-processar dados (cacheado) - extrai adiantamentos do proprio Contas a Pagar
+    df_contas_sem_ic, df_custos_financeiros, df_adiant = _preparar_dados_pagar(df_contas)
 
     # Obter opcoes de filtros (SEM intercompany e SEM adiantamentos)
-    filiais_opcoes, categorias_opcoes = get_opcoes_filtros(df_contas_sem_ic)
+    filiais_por_grupo, categorias_opcoes = get_opcoes_filtros(df_contas_sem_ic)
 
     # NavBar com filtros rapidos de tempo E FILIAL
-    navbar_result = render_navbar(pagina_atual='pagar', mostrar_filtro_tempo=True, filiais_opcoes=filiais_opcoes)
-    data_inicio, data_fim, filtro_filial_navbar = navbar_result if navbar_result else (datetime(2000, 1, 1).date(), datetime.now().date(), 'Todas as Filiais')
+    navbar_result = render_navbar(pagina_atual='pagar', mostrar_filtro_tempo=True, filiais_por_grupo=filiais_por_grupo)
+    data_inicio, data_fim, filtro_filiais = navbar_result if navbar_result else (datetime(2000, 1, 1).date(), datetime.now().date(), None)
 
     # Apenas ajustar data_inicio ao minimo dos dados (nao limitar data_fim)
     data_min = df_contas_sem_ic['EMISSAO'].min().date()
@@ -118,16 +128,13 @@ def main():
 
     # Renderizar sidebar e obter filtros (SEM intercompany)
     _, filtro_status, filtro_categoria, busca_fornecedor, filtro_tipo_doc, filtro_forma_pagto = render_sidebar(
-        df_contas_sem_ic, filiais_opcoes, categorias_opcoes
+        df_contas_sem_ic, filiais_por_grupo, categorias_opcoes
     )
-
-    # Usar filtro de filial da navbar (principal)
-    filtro_filial = filtro_filial_navbar
 
     # Aplicar filtros (sem intercompany)
     df = aplicar_filtros(
         df_contas_sem_ic, data_inicio, data_fim,
-        filtro_filial, filtro_status, filtro_categoria, busca_fornecedor,
+        filtro_filiais, filtro_status, filtro_categoria, busca_fornecedor,
         filtro_tipo_doc, filtro_forma_pagto
     )
     df_pendentes, df_vencidos = get_dados_filtrados(df, df_contas_sem_ic)
@@ -163,22 +170,16 @@ def main():
         fragment_categorias(df)
 
     with tab5:
-        render_tipo_documento(df)
+        fragment_tipo_documento(df)
 
     with tab6:
         fragment_formas_pagamento(df)
 
     with tab7:
         # Aplicar filtro de filial nos bancos (custos financeiros)
-        df_bancos_filtrado = df_custos_financeiros.copy()
-        if filtro_filial != 'Todas as Filiais':
-            if ' - ' in filtro_filial:
-                cod_filial = int(filtro_filial.split(' - ')[0])
-                if 'FILIAL' in df_bancos_filtrado.columns:
-                    df_bancos_filtrado = df_bancos_filtrado[df_bancos_filtrado['FILIAL'] == cod_filial]
-            else:
-                if 'NOME_FILIAL' in df_bancos_filtrado.columns:
-                    df_bancos_filtrado = df_bancos_filtrado[df_bancos_filtrado['NOME_FILIAL'] == filtro_filial]
+        df_bancos_filtrado = df_custos_financeiros
+        if filtro_filiais is not None and 'FILIAL' in df_bancos_filtrado.columns:
+            df_bancos_filtrado = df_bancos_filtrado[df_bancos_filtrado['FILIAL'].isin(filtro_filiais)]
         render_bancos(df_bancos_filtrado)
 
     with tab8:
@@ -187,20 +188,13 @@ def main():
 
     with tab9:
         # Aplicar filtro de filial nos adiantamentos e baixas
-        df_adiant_filtrado = df_adiant.copy()
-        df_baixas_filtrado = df_baixas.copy()
-        if filtro_filial != 'Todas as Filiais':
-            if ' - ' in filtro_filial:
-                cod_filial = int(filtro_filial.split(' - ')[0])
-                if 'FILIAL' in df_adiant_filtrado.columns:
-                    df_adiant_filtrado = df_adiant_filtrado[df_adiant_filtrado['FILIAL'] == cod_filial]
-                if 'FILIAL' in df_baixas_filtrado.columns:
-                    df_baixas_filtrado = df_baixas_filtrado[df_baixas_filtrado['FILIAL'] == cod_filial]
-            else:
-                if 'NOME_FILIAL' in df_adiant_filtrado.columns:
-                    df_adiant_filtrado = df_adiant_filtrado[df_adiant_filtrado['NOME_FILIAL'] == filtro_filial]
-                if 'NOME_FILIAL' in df_baixas_filtrado.columns:
-                    df_baixas_filtrado = df_baixas_filtrado[df_baixas_filtrado['NOME_FILIAL'] == filtro_filial]
+        df_adiant_filtrado = df_adiant
+        df_baixas_filtrado = df_baixas
+        if filtro_filiais is not None:
+            if 'FILIAL' in df_adiant_filtrado.columns:
+                df_adiant_filtrado = df_adiant_filtrado[df_adiant_filtrado['FILIAL'].isin(filtro_filiais)]
+            if 'FILIAL' in df_baixas_filtrado.columns:
+                df_baixas_filtrado = df_baixas_filtrado[df_baixas_filtrado['FILIAL'].isin(filtro_filiais)]
         render_adiantamentos(df_adiant_filtrado, df_baixas_filtrado)
 
     with tab10:

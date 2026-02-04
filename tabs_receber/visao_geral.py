@@ -8,6 +8,7 @@ import pandas as pd
 from datetime import datetime, timedelta
 
 from config.theme import get_cores
+from config.settings import GRUPOS_FILIAIS, get_grupo_filial
 from components.charts import criar_layout
 from utils.formatters import formatar_moeda, formatar_numero
 
@@ -100,6 +101,11 @@ def render_visao_geral_receber(df):
 
     st.divider()
 
+    # ========== RECEBIDO E PENDENTE POR FILIAL ==========
+    _render_recebido_pendente_filial(df, cores)
+
+    st.divider()
+
     # ========== LINHA 2: Fluxo de Caixa + Top Clientes ==========
     col1, col2 = st.columns(2)
 
@@ -114,6 +120,11 @@ def render_visao_geral_receber(df):
     # ========== EVOLUCAO ==========
     _render_evolucao_mensal(df, cores)
 
+    st.divider()
+
+    # ========== TABELA POR FILIAL/GRUPO ==========
+    _render_tabela_filiais(df, df_pendentes, df_vencidos, cores)
+
 
 def _render_alertas_recebimentos(df_pendentes, df_vencidos, cores, hoje):
     """Alertas de recebimentos - vencido, hoje, amanha, semana"""
@@ -122,19 +133,19 @@ def _render_alertas_recebimentos(df_pendentes, df_vencidos, cores, hoje):
 
     # Recebimentos de hoje
     df_hoje = df_pendentes[
-        (df_pendentes['VENCIMENTO'].dt.date == hoje_date)
+        (df_pendentes['VENCIMENTO'].dt.normalize() == pd.Timestamp(hoje_date))
     ] if len(df_pendentes) > 0 else pd.DataFrame()
 
     # Recebimentos de amanha
     amanha = hoje_date + timedelta(days=1)
     df_amanha = df_pendentes[
-        (df_pendentes['VENCIMENTO'].dt.date == amanha)
+        (df_pendentes['VENCIMENTO'].dt.normalize() == pd.Timestamp(amanha))
     ] if len(df_pendentes) > 0 else pd.DataFrame()
 
     # Recebimentos proximos 7 dias (exceto hoje e amanha)
     df_semana = df_pendentes[
-        (df_pendentes['VENCIMENTO'].dt.date > amanha) &
-        (df_pendentes['VENCIMENTO'].dt.date <= hoje_date + timedelta(days=7))
+        (df_pendentes['VENCIMENTO'] > pd.Timestamp(amanha)) &
+        (df_pendentes['VENCIMENTO'] <= pd.Timestamp(hoje_date + timedelta(days=7)))
     ] if len(df_pendentes) > 0 else pd.DataFrame()
 
     valor_vencido = df_vencidos['SALDO'].sum() if len(df_vencidos) > 0 else 0
@@ -252,193 +263,97 @@ def _render_aging_cards(df_pendentes, cores):
     """, unsafe_allow_html=True)
 
 
-def _padronizar_nome_filial(nome):
-    """Padroniza nome da filial para exibicao"""
-    if not nome:
-        return nome
+def _get_nome_grupo(cod_filial):
+    """Retorna nome do grupo a partir do codigo da filial"""
+    grupo_id = get_grupo_filial(int(cod_filial))
+    return GRUPOS_FILIAIS.get(grupo_id, f"Grupo {grupo_id}")
 
-    nome = str(nome).strip()
 
-    # Padronizar Progresso Agroindustrial por estado
-    if 'PROGRESSO AGROINDUST' in nome.upper():
-        if ' - BA' in nome or '(BA)' in nome:
-            return 'Progresso BA'
-        elif ' - DF' in nome or '(DF)' in nome:
-            return 'Progresso DF'
-        elif ' - GO' in nome or '(GO)' in nome or 'ST HELENA' in nome.upper():
-            return 'Progresso GO'
-        elif ' - MA' in nome or '(MA)' in nome or 'BALSAS' in nome.upper():
-            return 'Progresso MA'
-        elif ' - MG' in nome or '(MG)' in nome:
-            return 'Progresso MG'
-        elif ' - MT' in nome or '(MT)' in nome or '(PL)' in nome or '(LV)' in nome:
-            return 'Progresso MT'
-        elif ' - PA' in nome or '(PA)' in nome or 'TAILANDIA' in nome.upper():
-            return 'Progresso PA'
-        elif ' - PI' in nome or '(PI)' in nome:
-            return 'Progresso PI'
-        elif ' - RO' in nome or '(RO)' in nome:
-            return 'Progresso RO'
-        elif ' - TO' in nome or '(TO)' in nome:
-            return 'Progresso TO'
-        else:
-            return 'Progresso Agro'
-
-    # Outras padronizacoes
-    padronizacao = {
-        'PROGRESSO MATRIZ': 'Progresso Matriz',
-        'PROGRESSO FBO': 'Ouro Branco',
-        'FAZENDA OURO BRANCO': 'Ouro Branco',
-        'BRASIL AGRICOLA LTDA': 'Brasil Agricola',
-        'BRASIL AGRICOLA': 'Brasil Agricola',
-        'RAINHA DA SERRA': 'Rainha da Serra',
-        'SDS PARTICIPACOES': 'SDS Participacoes',
-        'TROPICAL AGROPARTICIPACOES': 'Tropical',
-        'TROPICAL': 'Tropical',
-        'AG3 AGRO': 'AG3 Agro',
-        'CG3 AGRO': 'CG3 Agro',
-        'IMPERIAL': 'Imperial',
-        'PENINSULA': 'Peninsula',
-    }
-
-    nome_upper = nome.upper()
-    for padrao, novo_nome in padronizacao.items():
-        if padrao in nome_upper:
-            return novo_nome
-
-    return nome
+def _detectar_multiplos_grupos(df):
+    """Detecta se os dados contem filiais de multiplos grupos"""
+    if 'FILIAL' not in df.columns or len(df) == 0:
+        return False
+    grupos = df['FILIAL'].dropna().apply(lambda x: get_grupo_filial(int(x))).nunique()
+    return grupos > 1
 
 
 def _render_por_filial(df_pendentes, cores):
-    """Saldo a receber por filial - versão melhorada"""
+    """Saldo a receber por Filial - agrupa por Grupo quando vendo todas as filiais"""
 
-    st.markdown("##### A Receber por Filial")
-
-    if 'NOME_FILIAL' not in df_pendentes.columns and 'FILIAL' not in df_pendentes.columns:
-        st.info("Dados de filial nao disponiveis.")
+    if len(df_pendentes) == 0:
+        st.info("Sem saldo pendente")
         return
 
-    # Copiar e preparar dados
-    df_temp = df_pendentes.copy()
+    multiplos_grupos = _detectar_multiplos_grupos(df_pendentes)
 
-    # Criar coluna com código + nome padronizado
-    if 'FILIAL' in df_temp.columns and 'NOME_FILIAL' in df_temp.columns:
-        df_temp['FILIAL_PADRAO'] = df_temp['NOME_FILIAL'].apply(_padronizar_nome_filial)
-        df_temp['FILIAL_DISPLAY'] = df_temp.apply(
-            lambda x: f"{int(x['FILIAL'])} - {_padronizar_nome_filial(x['NOME_FILIAL'])}"
-            if pd.notna(x['FILIAL']) else _padronizar_nome_filial(x['NOME_FILIAL']),
-            axis=1
-        )
-    elif 'NOME_FILIAL' in df_temp.columns:
-        df_temp['FILIAL_PADRAO'] = df_temp['NOME_FILIAL'].apply(_padronizar_nome_filial)
-        df_temp['FILIAL_DISPLAY'] = df_temp['FILIAL_PADRAO']
-    else:
-        df_temp['FILIAL_DISPLAY'] = df_temp['FILIAL'].astype(str)
+    if multiplos_grupos:
+        # Agrupar por GRUPO
+        st.markdown("##### A Receber por Grupo")
+        df_temp = df_pendentes.copy()
+        df_temp['GRUPO'] = df_temp['FILIAL'].apply(lambda x: _get_nome_grupo(x) if pd.notna(x) else 'Outros')
 
-    # Identificar vencidos
-    df_temp['VENCIDO'] = df_temp['STATUS'] == 'Vencido'
-
-    # Agrupar por filial
-    df_filial = df_temp.groupby('FILIAL_DISPLAY').agg({
-        'SALDO': 'sum',
-        'VALOR_ORIGINAL': ['sum', 'count'],
-        'VENCIDO': lambda x: df_temp.loc[x.index, 'SALDO'][x].sum(),
-        'NOME_CLIENTE': 'nunique'
-    }).reset_index()
-
-    df_filial.columns = ['Filial', 'Saldo', 'Total_Orig', 'Qtd', 'Vencido', 'Clientes']
-    df_filial['Pct_Vencido'] = (df_filial['Vencido'] / df_filial['Saldo'] * 100).fillna(0)
-    df_filial = df_filial.sort_values('Saldo', ascending=False)
-
-    if len(df_filial) == 0:
-        st.info("Sem dados")
-        return
-
-    total_geral = df_filial['Saldo'].sum()
-    total_vencido = df_filial['Vencido'].sum()
-
-    # Layout: Gráfico + Tabela
-    col_graf, col_tab = st.columns([3, 2])
-
-    with col_graf:
-        df_plot = df_filial.head(10).sort_values('Saldo', ascending=True)
+        df_grp = df_temp.groupby('GRUPO').agg({
+            'SALDO': 'sum',
+            'VALOR_ORIGINAL': 'count'
+        }).reset_index()
+        df_grp.columns = ['Grupo', 'Saldo', 'Qtd']
+        df_grp = df_grp.sort_values('Saldo', ascending=True)
 
         fig = go.Figure()
-
-        # Barra de saldo a vencer (verde)
-        saldo_a_vencer = df_plot['Saldo'] - df_plot['Vencido']
         fig.add_trace(go.Bar(
-            y=df_plot['Filial'].str[:30],
-            x=saldo_a_vencer,
+            y=df_grp['Grupo'],
+            x=df_grp['Saldo'],
             orientation='h',
-            name='A Vencer',
             marker_color=cores['sucesso'],
-            text=[formatar_moeda(v) for v in saldo_a_vencer],
-            textposition='inside',
-            textfont=dict(size=8, color='white'),
-            hovertemplate="<b>%{y}</b><br>A Vencer: %{x:,.2f}<extra></extra>"
-        ))
-
-        # Barra de vencido (vermelho)
-        fig.add_trace(go.Bar(
-            y=df_plot['Filial'].str[:30],
-            x=df_plot['Vencido'],
-            orientation='h',
-            name='Vencido',
-            marker_color=cores['perigo'],
-            text=[formatar_moeda(v) if v > 0 else '' for v in df_plot['Vencido']],
-            textposition='inside',
-            textfont=dict(size=8, color='white'),
-            hovertemplate="<b>%{y}</b><br>Vencido: %{x:,.2f}<extra></extra>"
+            text=[f"{formatar_moeda(v)}" for v in df_grp['Saldo']],
+            textposition='outside',
+            textfont=dict(size=9, color=cores['texto'])
         ))
 
         fig.update_layout(
-            criar_layout(320, barmode='stack'),
-            margin=dict(l=10, r=10, t=10, b=10),
+            criar_layout(350),
+            margin=dict(l=10, r=80, t=10, b=10),
             xaxis=dict(showticklabels=False, showgrid=False),
-            yaxis=dict(tickfont=dict(size=8, color=cores['texto'])),
-            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1, font=dict(size=9))
+            yaxis=dict(tickfont=dict(size=9, color=cores['texto']))
         )
-
         st.plotly_chart(fig, use_container_width=True)
+    else:
+        # Agrupar por filial individual (dentro de um grupo)
+        st.markdown("##### A Receber por Filial")
 
-    with col_tab:
-        # Tabela resumo
-        df_tabela = df_filial.head(10).copy()
-        df_tabela['% Total'] = (df_tabela['Saldo'] / total_geral * 100).round(1)
-        df_tabela['Saldo_Fmt'] = df_tabela['Saldo'].apply(lambda x: formatar_moeda(x, completo=True))
-        df_tabela['Vencido_Fmt'] = df_tabela['Vencido'].apply(lambda x: formatar_moeda(x, completo=True))
+        if 'NOME_FILIAL' not in df_pendentes.columns and 'FILIAL' not in df_pendentes.columns:
+            st.info("Dados de filial nao disponiveis.")
+            return
 
-        df_show = df_tabela[['Filial', 'Saldo_Fmt', 'Vencido_Fmt', 'Qtd', '% Total']].copy()
-        df_show.columns = ['Filial', 'Saldo', 'Vencido', 'Títulos', '% Total']
+        df_filial = df_pendentes.groupby(['FILIAL', 'NOME_FILIAL']).agg({
+            'SALDO': 'sum',
+            'VALOR_ORIGINAL': 'count'
+        }).reset_index()
+        df_filial.columns = ['Cod', 'Nome', 'Saldo', 'Qtd']
+        df_filial['Filial'] = df_filial['Cod'].astype(int).astype(str) + ' - ' + df_filial['Nome'].str.split(' - ').str[-1].str.strip()
+        df_filial = df_filial.sort_values('Saldo', ascending=True)
 
-        st.dataframe(
-            df_show,
-            use_container_width=True,
-            hide_index=True,
-            height=320,
-            column_config={
-                "% Total": st.column_config.ProgressColumn(
-                    "% Total",
-                    format="%.1f%%",
-                    min_value=0,
-                    max_value=100,
-                ),
-            }
+        if len(df_filial) > 12:
+            df_filial = df_filial.tail(12)
+
+        fig = go.Figure()
+        fig.add_trace(go.Bar(
+            y=df_filial['Filial'],
+            x=df_filial['Saldo'],
+            orientation='h',
+            marker_color=cores['sucesso'],
+            text=[f"{formatar_moeda(v)}" for v in df_filial['Saldo']],
+            textposition='outside',
+            textfont=dict(size=9, color=cores['texto'])
+        ))
+
+        fig.update_layout(
+            criar_layout(350),
+            margin=dict(l=10, r=80, t=10, b=10),
+            xaxis=dict(showticklabels=False, showgrid=False),
+            yaxis=dict(tickfont=dict(size=9, color=cores['texto']))
         )
-
-    # Resumo inferior
-    col1, col2, col3, col4 = st.columns(4)
-    with col1:
-        st.metric("Total Filiais", len(df_filial))
-    with col2:
-        st.metric("Total a Receber", formatar_moeda(total_geral))
-    with col3:
-        st.metric("Total Vencido", formatar_moeda(total_vencido), delta_color="off")
-    with col4:
-        pct_venc_geral = (total_vencido / total_geral * 100) if total_geral > 0 else 0
-        cor_pct = "inverse" if pct_venc_geral > 20 else "off"
-        st.metric("% Vencido", f"{pct_venc_geral:.1f}%", delta_color=cor_pct)
+        st.plotly_chart(fig, use_container_width=True)
 
 
 def _render_top_categorias(df_pendentes, cores):
@@ -504,8 +419,8 @@ def _render_fluxo_caixa(df_pendentes, cores, hoje):
 
     # Proximos 30 dias
     df_futuro = df_pendentes[
-        (df_pendentes['VENCIMENTO'].dt.date >= hoje_date) &
-        (df_pendentes['VENCIMENTO'].dt.date <= hoje_date + timedelta(days=30))
+        (df_pendentes['VENCIMENTO'] >= pd.Timestamp(hoje_date)) &
+        (df_pendentes['VENCIMENTO'] <= pd.Timestamp(hoje_date + timedelta(days=30)))
     ].copy()
 
     if len(df_futuro) == 0:
@@ -698,3 +613,177 @@ def _render_evolucao_mensal(df, cores):
     )
 
     st.plotly_chart(fig, use_container_width=True)
+
+
+def _render_tabela_filiais(df, df_pendentes, df_vencidos, cores):
+    """Tabela detalhada - por Grupo quando vendo todas, por filial quando filtrado"""
+
+    if len(df) == 0:
+        st.info("Sem dados")
+        return
+
+    multiplos_grupos = _detectar_multiplos_grupos(df)
+
+    if multiplos_grupos:
+        st.markdown("##### Resumo por Grupo")
+
+        df_temp = df.copy()
+        df_temp['GRUPO'] = df_temp['FILIAL'].apply(lambda x: _get_nome_grupo(x) if pd.notna(x) else 'Outros')
+
+        df_resumo = df_temp.groupby('GRUPO').agg({
+            'VALOR_ORIGINAL': ['sum', 'count'],
+            'SALDO': 'sum',
+            'FILIAL': 'nunique'
+        }).reset_index()
+        df_resumo.columns = ['Grupo', 'Total', 'Titulos', 'Saldo', 'Filiais']
+
+        # Vencidos por grupo
+        df_venc_temp = df_vencidos.copy()
+        if len(df_venc_temp) > 0:
+            df_venc_temp['GRUPO'] = df_venc_temp['FILIAL'].apply(lambda x: _get_nome_grupo(x) if pd.notna(x) else 'Outros')
+            df_venc_grp = df_venc_temp.groupby('GRUPO')['SALDO'].sum().reset_index()
+            df_venc_grp.columns = ['Grupo', 'Vencido']
+            df_resumo = df_resumo.merge(df_venc_grp, on='Grupo', how='left')
+        else:
+            df_resumo['Vencido'] = 0.0
+        df_resumo['Vencido'] = df_resumo['Vencido'].fillna(0)
+
+        df_resumo['Recebido'] = df_resumo['Total'] - df_resumo['Saldo']
+        df_resumo['% Recebido'] = (df_resumo['Recebido'] / df_resumo['Total'] * 100).round(1)
+        df_resumo['% Vencido'] = (df_resumo['Vencido'] / df_resumo['Saldo'] * 100).fillna(0).round(1)
+        df_resumo = df_resumo.sort_values('Saldo', ascending=False)
+
+        df_display = df_resumo[['Grupo', 'Filiais', 'Titulos', 'Total', 'Recebido', 'Saldo', 'Vencido', '% Recebido', '% Vencido']].copy()
+        df_display['Total'] = df_display['Total'].apply(formatar_moeda)
+        df_display['Recebido'] = df_display['Recebido'].apply(formatar_moeda)
+        df_display['Saldo'] = df_display['Saldo'].apply(formatar_moeda)
+        df_display['Vencido'] = df_display['Vencido'].apply(formatar_moeda)
+        df_display['% Recebido'] = df_display['% Recebido'].apply(lambda x: f"{x:.1f}%")
+        df_display['% Vencido'] = df_display['% Vencido'].apply(lambda x: f"{x:.1f}%")
+        df_display['Titulos'] = df_display['Titulos'].apply(formatar_numero)
+    else:
+        st.markdown("##### Resumo por Filial")
+
+        df_resumo = df.groupby(['FILIAL', 'NOME_FILIAL']).agg({
+            'VALOR_ORIGINAL': ['sum', 'count'],
+            'SALDO': 'sum'
+        }).reset_index()
+        df_resumo.columns = ['FILIAL', 'NOME_FILIAL', 'VALOR_ORIGINAL', 'Titulos_count', 'SALDO']
+
+        df_venc_filial = df_vencidos.groupby('FILIAL')['SALDO'].sum().reset_index()
+        df_venc_filial.columns = ['FILIAL', 'Vencido']
+
+        df_resumo = df_resumo.merge(df_venc_filial, on='FILIAL', how='left')
+        df_resumo['Vencido'] = df_resumo['Vencido'].fillna(0)
+
+        df_resumo['Recebido'] = df_resumo['VALOR_ORIGINAL'] - df_resumo['SALDO']
+        df_resumo['% Recebido'] = (df_resumo['Recebido'] / df_resumo['VALOR_ORIGINAL'] * 100).round(1)
+        df_resumo['% Vencido'] = (df_resumo['Vencido'] / df_resumo['SALDO'] * 100).fillna(0).round(1)
+
+        df_resumo = df_resumo.rename(columns={
+            'FILIAL': 'Cod',
+            'NOME_FILIAL': 'Filial',
+            'VALOR_ORIGINAL': 'Total',
+            'SALDO': 'Saldo',
+            'Titulos_count': 'Titulos'
+        })
+        df_resumo = df_resumo.sort_values('Saldo', ascending=False)
+
+        df_display = df_resumo[['Cod', 'Filial', 'Titulos', 'Total', 'Recebido', 'Saldo', 'Vencido', '% Recebido', '% Vencido']].copy()
+        df_display['Total'] = df_display['Total'].apply(formatar_moeda)
+        df_display['Recebido'] = df_display['Recebido'].apply(formatar_moeda)
+        df_display['Saldo'] = df_display['Saldo'].apply(formatar_moeda)
+        df_display['Vencido'] = df_display['Vencido'].apply(formatar_moeda)
+        df_display['% Recebido'] = df_display['% Recebido'].apply(lambda x: f"{x:.1f}%")
+        df_display['% Vencido'] = df_display['% Vencido'].apply(lambda x: f"{x:.1f}%")
+        df_display['Titulos'] = df_display['Titulos'].apply(formatar_numero)
+
+    st.dataframe(
+        df_display,
+        use_container_width=True,
+        hide_index=True,
+        height=400
+    )
+
+
+def _render_recebido_pendente_filial(df, cores):
+    """Graficos de Recebido e Pendente - por Grupo ou por Filial conforme filtro"""
+
+    if len(df) == 0:
+        return
+
+    multiplos_grupos = _detectar_multiplos_grupos(df)
+
+    if multiplos_grupos:
+        # Agrupar por GRUPO
+        df_temp = df.copy()
+        df_temp['GRUPO'] = df_temp['FILIAL'].apply(lambda x: _get_nome_grupo(x) if pd.notna(x) else 'Outros')
+        df_agg = df_temp.groupby('GRUPO').agg({
+            'VALOR_ORIGINAL': 'sum', 'SALDO': 'sum'
+        }).reset_index()
+        df_agg['RECEBIDO'] = df_agg['VALOR_ORIGINAL'] - df_agg['SALDO']
+        df_agg = df_agg[(df_agg['RECEBIDO'] > 0) | (df_agg['SALDO'] > 0)]
+        label_col = 'GRUPO'
+        titulo_rec = '##### Recebido por Grupo'
+        titulo_pend = '##### Pendente por Grupo'
+    else:
+        if 'NOME_FILIAL' not in df.columns:
+            return
+        df_agg = df.groupby('NOME_FILIAL').agg({
+            'VALOR_ORIGINAL': 'sum', 'SALDO': 'sum'
+        }).reset_index()
+        df_agg['RECEBIDO'] = df_agg['VALOR_ORIGINAL'] - df_agg['SALDO']
+        df_agg = df_agg[(df_agg['RECEBIDO'] > 0) | (df_agg['SALDO'] > 0)]
+        label_col = 'NOME_FILIAL'
+        titulo_rec = '##### Recebido por Filial'
+        titulo_pend = '##### Pendente por Filial'
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        st.markdown(titulo_rec)
+        df_rec = df_agg[df_agg['RECEBIDO'] > 0].sort_values('RECEBIDO', ascending=True).tail(15)
+        if len(df_rec) > 0:
+            fig = go.Figure()
+            fig.add_trace(go.Bar(
+                y=df_rec[label_col].str[-30:],
+                x=df_rec['RECEBIDO'],
+                orientation='h',
+                marker_color=cores['sucesso'],
+                text=[formatar_moeda(x) for x in df_rec['RECEBIDO']],
+                textposition='outside',
+                textfont=dict(size=8, color=cores['texto'])
+            ))
+            fig.update_layout(
+                criar_layout(max(250, len(df_rec) * 28)),
+                margin=dict(l=10, r=80, t=10, b=10),
+                xaxis=dict(showticklabels=False, showgrid=True, gridcolor=cores['borda']),
+                yaxis=dict(tickfont=dict(color=cores['texto'], size=9))
+            )
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.info("Nenhum titulo recebido")
+
+    with col2:
+        st.markdown(titulo_pend)
+        df_pend = df_agg[df_agg['SALDO'] > 0].sort_values('SALDO', ascending=True).tail(15)
+        if len(df_pend) > 0:
+            fig = go.Figure()
+            fig.add_trace(go.Bar(
+                y=df_pend[label_col].str[-30:],
+                x=df_pend['SALDO'],
+                orientation='h',
+                marker_color=cores['alerta'],
+                text=[formatar_moeda(x) for x in df_pend['SALDO']],
+                textposition='outside',
+                textfont=dict(size=8, color=cores['texto'])
+            ))
+            fig.update_layout(
+                criar_layout(max(250, len(df_pend) * 28)),
+                margin=dict(l=10, r=80, t=10, b=10),
+                xaxis=dict(showticklabels=False, showgrid=True, gridcolor=cores['borda']),
+                yaxis=dict(tickfont=dict(color=cores['texto'], size=9))
+            )
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.info("Nenhum titulo pendente")

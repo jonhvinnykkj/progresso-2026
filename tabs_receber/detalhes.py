@@ -160,8 +160,8 @@ def _aplicar_filtros(df):
     if dt_baixa and 'DT_BAIXA' in df_filtrado.columns:
         if isinstance(dt_baixa, tuple) and len(dt_baixa) == 2:
             df_filtrado = df_filtrado[
-                (df_filtrado['DT_BAIXA'].dt.date >= dt_baixa[0]) &
-                (df_filtrado['DT_BAIXA'].dt.date <= dt_baixa[1])
+                (df_filtrado['DT_BAIXA'] >= pd.Timestamp(dt_baixa[0])) &
+                (df_filtrado['DT_BAIXA'] <= pd.Timestamp(dt_baixa[1]))
             ]
 
     return df_filtrado.sort_values('VENCIMENTO', ascending=True)

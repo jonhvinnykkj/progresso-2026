@@ -41,7 +41,7 @@ def render_bancos(df):
 
     # ========== FILTROS ==========
     st.markdown("##### Filtros")
-    col1, col2, col3, col4 = st.columns(4)
+    col1, col2, col3 = st.columns(3)
 
     with col1:
         # Filtro de banco/fornecedor
@@ -54,11 +54,6 @@ def render_bancos(df):
         filtro_tipo = st.selectbox("Tipo de Operacao", tipos, key="banco_tipo")
 
     with col3:
-        # Filtro de filial
-        filiais = ['Todas'] + sorted(df_bancos['NOME_FILIAL'].dropna().unique().tolist())
-        filtro_filial = st.selectbox("Filial", filiais, key="banco_filial")
-
-    with col4:
         # Filtro de status
         filtro_status = st.selectbox("Status Parcela", ["Todas", "Pagas", "Pendentes", "Vencidas"], key="banco_status")
 
@@ -70,9 +65,6 @@ def render_bancos(df):
 
     if filtro_tipo != 'Todas':
         df_filtrado = df_filtrado[df_filtrado['DESCRICAO'] == filtro_tipo]
-
-    if filtro_filial != 'Todas':
-        df_filtrado = df_filtrado[df_filtrado['NOME_FILIAL'] == filtro_filial]
 
     if filtro_status == 'Pagas':
         df_filtrado = df_filtrado[df_filtrado['SALDO'] == 0]

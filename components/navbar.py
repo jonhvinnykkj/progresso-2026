@@ -6,6 +6,7 @@ import streamlit as st
 from datetime import datetime, timedelta
 import calendar
 from config.theme import get_cores
+from config.settings import GRUPOS_FILIAIS, abreviar_nome_subfilial
 
 # Nomes dos meses em portugues
 MESES_PT = {
@@ -19,17 +20,18 @@ MESES_COMPLETO = {
 }
 
 
-def render_navbar(pagina_atual: str = "pagar", mostrar_filtro_tempo: bool = True, filiais_opcoes: list = None):
+def render_navbar(pagina_atual: str = "pagar", mostrar_filtro_tempo: bool = True, filiais_por_grupo: dict = None):
     """
     Renderiza a barra de navegacao superior com filtros de tempo e filial
 
     Args:
         pagina_atual: 'pagar', 'intercompany', 'receber'
         mostrar_filtro_tempo: Se deve mostrar os filtros de tempo
-        filiais_opcoes: Lista de filiais disponiveis para filtro
+        filiais_por_grupo: Dict {grupo_id: [(cod, nome), ...]} com filiais agrupadas
 
     Returns:
-        tuple: (data_inicio, data_fim, filtro_filial) se mostrar_filtro_tempo=True, else None
+        tuple: (data_inicio, data_fim, filtro_filiais) se mostrar_filtro_tempo=True, else None
+               filtro_filiais: None (todas) ou lista de codigos int
     """
     cores = get_cores()
     hoje = datetime.now()
@@ -119,24 +121,10 @@ def render_navbar(pagina_atual: str = "pagar", mostrar_filtro_tempo: bool = True
 
     with col_user:
         if nome_usuario:
-            # Mostrar botao de admin se usuario for admin
-            from auth import is_admin
-            if is_admin():
-                col_admin, col_logout = st.columns(2)
-                with col_admin:
-                    if st.button("Usuarios", key="btn_admin_usuarios", type="secondary", use_container_width=True):
-                        st.session_state.admin_painel = True
-                        st.rerun()
-                with col_logout:
-                    if st.button("Sair", key="btn_logout", type="secondary", use_container_width=True):
-                        st.session_state.autenticado = False
-                        st.session_state.usuario = None
-                        st.rerun()
-            else:
-                if st.button("Sair", key="btn_logout", type="secondary", use_container_width=True):
-                    st.session_state.autenticado = False
-                    st.session_state.usuario = None
-                    st.rerun()
+            if st.button("Sair", key="btn_logout", type="secondary", use_container_width=True):
+                st.session_state.autenticado = False
+                st.session_state.usuario = None
+                st.rerun()
 
     # Linha com navegacao entre paginas (3 modulos principais)
     col_spacer, col_nav1, col_nav2, col_nav3, col_spacer2 = st.columns([2, 1.2, 1.2, 1.2, 2])
@@ -178,7 +166,7 @@ def render_navbar(pagina_atual: str = "pagar", mostrar_filtro_tempo: bool = True
     # Filtros de tempo e filial
     data_inicio = None
     data_fim = None
-    filtro_filial = 'Todas as Filiais'
+    filtro_filiais = None  # None = todas as filiais
 
     if mostrar_filtro_tempo:
         # Inicializar estados
@@ -198,7 +186,7 @@ def render_navbar(pagina_atual: str = "pagar", mostrar_filtro_tempo: bool = True
             st.session_state.filtro_data_fim = hoje.date()
 
         # Container de filtros de tempo e filial
-        col_periodo, col_filial = st.columns([3, 1])
+        col_periodo, col_filial = st.columns([3, 1.5])
 
         with col_periodo:
             st.markdown(f"""
@@ -221,7 +209,7 @@ def render_navbar(pagina_atual: str = "pagar", mostrar_filtro_tempo: bool = True
             """, unsafe_allow_html=True)
 
         # Tabs para tipo de filtro + filtro de filial
-        col_tipo, col_filtros, col_filial_select = st.columns([1, 3, 1.2])
+        col_tipo, col_filtros, col_filial_select = st.columns([1, 2.5, 1.7])
 
         with col_tipo:
             tipo_periodo = st.radio(
@@ -362,37 +350,80 @@ def render_navbar(pagina_atual: str = "pagar", mostrar_filtro_tempo: bool = True
                 if data_fim < data_inicio:
                     data_fim = data_inicio
 
-        # Coluna do filtro de filial
+        # Coluna do filtro de filial (hierarquico: Grupo + Subfilial)
         with col_filial_select:
-            # Inicializar estado da filial
-            if 'filtro_filial_navbar' not in st.session_state:
-                st.session_state.filtro_filial_navbar = 'Todas as Filiais'
+            # Montar opcoes de grupo, mesclando grupos com mesmo nome (ex: 1,4,5 = Agricola)
+            # nome_grupo -> [grupo_id, ...]
+            _nome_para_ids = {}
+            if filiais_por_grupo and len(filiais_por_grupo) > 0:
+                for grupo_id in sorted(filiais_por_grupo.keys()):
+                    nome_grupo = GRUPOS_FILIAIS.get(grupo_id, f"Grupo {grupo_id}")
+                    if nome_grupo not in _nome_para_ids:
+                        _nome_para_ids[nome_grupo] = []
+                    _nome_para_ids[nome_grupo].append(grupo_id)
 
-            # Opcoes de filial
-            if filiais_opcoes and len(filiais_opcoes) > 0:
-                opcoes = filiais_opcoes
-            else:
-                opcoes = ['Todas as Filiais']
+            # Ordenar pelo menor grupo_id de cada nome
+            nomes_ordenados = sorted(_nome_para_ids.keys(),
+                                     key=lambda n: min(_nome_para_ids[n]))
 
-            filtro_filial = st.selectbox(
+            # Selectbox do Grupo (Filial)
+            opcoes_grupo = ["Todas as Filiais"] + nomes_ordenados
+
+            grupo_selecionado = st.selectbox(
                 "Filial",
-                opcoes,
-                index=opcoes.index(st.session_state.filtro_filial_navbar) if st.session_state.filtro_filial_navbar in opcoes else 0,
-                key="nav_filial",
+                opcoes_grupo,
+                key="nav_grupo_filial",
                 label_visibility="collapsed"
             )
-            st.session_state.filtro_filial_navbar = filtro_filial
 
-            # Mostrar filial selecionada
-            if filtro_filial != 'Todas as Filiais':
-                st.markdown(f"""
-                <div style="text-align: center; padding: 0.2rem; background: {cores['info']}15;
-                            border-radius: 4px; margin-top: 0.2rem;">
-                    <span style="color: {cores['info']}; font-size: 0.65rem; font-weight: 500;">
-                        Filtrado
-                    </span>
-                </div>
-                """, unsafe_allow_html=True)
+            # Limpar subfiliais quando o grupo muda
+            grupo_anterior = st.session_state.get('_nav_grupo_anterior', None)
+            if grupo_selecionado != grupo_anterior:
+                st.session_state['_nav_grupo_anterior'] = grupo_selecionado
+                if 'nav_subfilial' in st.session_state:
+                    st.session_state['nav_subfilial'] = []
+
+            # Determinar grupo_ids selecionados (pode ser mais de um se mesclados)
+            grupo_ids_sel = []
+            if grupo_selecionado != "Todas as Filiais" and grupo_selecionado in _nome_para_ids:
+                grupo_ids_sel = _nome_para_ids[grupo_selecionado]
+
+            # Multiselect de Subfiliais (apenas se um grupo foi selecionado)
+            if grupo_ids_sel and filiais_por_grupo:
+                # Juntar subfiliais de todos os grupo_ids mesclados
+                subfiliais = []
+                for gid in grupo_ids_sel:
+                    if gid in filiais_por_grupo:
+                        subfiliais.extend(filiais_por_grupo[gid])
+                subfiliais.sort(key=lambda x: x[0])
+
+                if subfiliais:
+                    # Exibir com nome curto: "201 - BA" em vez de "201 - PROGRESSO AGROINDUSTRIAL - BA"
+                    opcoes_sub = [f"{cod} - {abreviar_nome_subfilial(nome)}" for cod, nome in subfiliais]
+
+                    selecionadas = st.multiselect(
+                        "Subfilial",
+                        opcoes_sub,
+                        key="nav_subfilial",
+                        label_visibility="collapsed",
+                        placeholder="Todas do grupo"
+                    )
+
+                    if selecionadas:
+                        # Extrair codigos das subfiliais selecionadas
+                        filtro_filiais = [int(s.split(' - ')[0]) for s in selecionadas]
+                    else:
+                        # Nenhuma subfilial selecionada = todas do grupo
+                        filtro_filiais = [cod for cod, _ in subfiliais]
+
+                    st.markdown(f"""
+                    <div style="text-align: center; padding: 0.2rem; background: {cores['info']}15;
+                                border-radius: 4px; margin-top: 0.2rem;">
+                        <span style="color: {cores['info']}; font-size: 0.65rem; font-weight: 500;">
+                            {len(filtro_filiais)} filial(is)
+                        </span>
+                    </div>
+                    """, unsafe_allow_html=True)
 
         # Mostrar periodo selecionado
         if data_inicio and data_fim:
@@ -406,7 +437,7 @@ def render_navbar(pagina_atual: str = "pagar", mostrar_filtro_tempo: bool = True
             """, unsafe_allow_html=True)
 
     if mostrar_filtro_tempo:
-        return data_inicio, data_fim, filtro_filial
+        return data_inicio, data_fim, filtro_filiais
     return None
 
 

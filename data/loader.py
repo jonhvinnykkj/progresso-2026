@@ -5,7 +5,7 @@ import pandas as pd
 import streamlit as st
 from datetime import datetime
 
-from config.settings import CACHE_TTL, INTERCOMPANY_PADRONIZACAO, INTERCOMPANY_PATTERNS
+from config.settings import CACHE_TTL, INTERCOMPANY_PADRONIZACAO, INTERCOMPANY_PATTERNS, GRUPOS_FILIAIS, get_grupo_filial
 
 
 def padronizar_nome_intercompany(nome):
@@ -112,18 +112,17 @@ def carregar_dados():
     """Carrega e processa os dados dos arquivos Excel"""
 
     # Carregar dados dos arquivos Excel
-    df_contas = pd.read_excel('Contas a Pagar.xlsx')
-    df_adiant = pd.read_excel('Adiantamentos a pagar.xlsx')
-    df_baixas = pd.read_excel('Baixas de adiantamentos a pagar.xlsx')
+    # Adiantamentos sao extraidos do proprio Contas a Pagar (evita duplicacao)
+    df_contas = pd.read_excel('data/Contas a Pagar.xlsx')
+    df_baixas = pd.read_excel('data/Baixas de adiantamentos a pagar.xlsx')
 
     # Converter nomes de colunas para uppercase (compatibilidade)
     df_contas.columns = [c.upper() for c in df_contas.columns]
-    df_adiant.columns = [c.upper() for c in df_adiant.columns]
     df_baixas.columns = [c.upper() for c in df_baixas.columns]
 
     # Converter colunas de data
     for col in ['EMISSAO', 'VENCIMENTO', 'VENCTO_REAL', 'DT_BAIXA']:
-        for df in [df_contas, df_adiant, df_baixas]:
+        for df in [df_contas, df_baixas]:
             if col in df.columns:
                 df[col] = pd.to_datetime(df[col], errors='coerce')
 
@@ -205,23 +204,23 @@ def carregar_dados():
     if 'DIF_DIAS_EMIS_BAIXA' in df_baixas.columns:
         df_baixas['DIAS_ATE_BAIXA'] = pd.to_numeric(df_baixas['DIF_DIAS_EMIS_BAIXA'], errors='coerce').fillna(0)
 
-    return df_contas, df_adiant, df_baixas
+    return df_contas, df_baixas
 
 
-def aplicar_filtros(df_contas, data_inicio, data_fim, filtro_filial, filtro_status, filtro_categoria,
+def aplicar_filtros(df_contas, data_inicio, data_fim, filtro_filiais, filtro_status, filtro_categoria,
                     busca_fornecedor, filtro_tipo_doc='Todos', filtro_forma_pagto='Todas'):
-    """Aplica filtros de forma otimizada usando máscaras booleanas"""
-    # Criar máscara base para datas
-    mask = (df_contas['EMISSAO'].dt.date >= data_inicio) & (df_contas['EMISSAO'].dt.date <= data_fim)
+    """Aplica filtros de forma otimizada usando máscaras booleanas
 
-    # Aplicar filtros adicionais
-    if filtro_filial != 'Todas as Filiais':
-        # Extrair código da filial do formato "COD - NOME"
-        if ' - ' in filtro_filial:
-            cod_filial = int(filtro_filial.split(' - ')[0])
-            mask &= (df_contas['FILIAL'] == cod_filial)
-        else:
-            mask &= (df_contas['NOME_FILIAL'] == filtro_filial)
+    filtro_filiais: None (todas) ou lista de codigos int de filiais selecionadas
+    """
+    # Criar máscara base para datas (comparacao vetorizada em C)
+    ts_inicio = pd.Timestamp(data_inicio)
+    ts_fim = pd.Timestamp(data_fim) + pd.Timedelta(days=1) - pd.Timedelta(seconds=1)
+    mask = (df_contas['EMISSAO'] >= ts_inicio) & (df_contas['EMISSAO'] <= ts_fim)
+
+    # Aplicar filtro de filiais (lista de codigos ou None)
+    if filtro_filiais is not None:
+        mask &= df_contas['FILIAL'].isin(filtro_filiais)
 
     if filtro_status != 'Todos os Status':
         if filtro_status == 'Pago':
@@ -254,16 +253,22 @@ def aplicar_filtros(df_contas, data_inicio, data_fim, filtro_filial, filtro_stat
 
 @st.cache_data
 def get_opcoes_filtros(_df_contas):
-    """Pré-calcula as opções de filtros"""
-    # Criar opções de filial com código + nome
+    """Pré-calcula as opções de filtros com estrutura hierarquica de filiais"""
+    # Criar estrutura hierarquica: {grupo_id: [(cod, nome), ...]}
     filiais_df = _df_contas[['FILIAL', 'NOME_FILIAL']].drop_duplicates().dropna()
     filiais_df = filiais_df.sort_values('FILIAL')
-    filiais_opcoes = ['Todas as Filiais'] + [
-        f"{row['FILIAL']} - {row['NOME_FILIAL']}"
-        for _, row in filiais_df.iterrows()
-    ]
+
+    filiais_por_grupo = {}
+    for _, row in filiais_df.iterrows():
+        cod = int(row['FILIAL'])
+        nome = row['NOME_FILIAL']
+        grupo_id = get_grupo_filial(cod)
+        if grupo_id not in filiais_por_grupo:
+            filiais_por_grupo[grupo_id] = []
+        filiais_por_grupo[grupo_id].append((cod, nome))
+
     categorias = ['Todas as Categorias'] + sorted(_df_contas['DESCRICAO'].dropna().unique().tolist())
-    return filiais_opcoes, categorias
+    return filiais_por_grupo, categorias
 
 
 def get_dados_filtrados(df, df_contas):

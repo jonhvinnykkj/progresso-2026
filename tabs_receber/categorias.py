@@ -9,6 +9,7 @@ import plotly.graph_objects as go
 from config.theme import get_cores
 from components.charts import criar_layout
 from utils.formatters import formatar_moeda, formatar_numero
+from config.settings import GRUPOS_FILIAIS, get_grupo_filial
 
 
 def render_categorias_receber(df):
@@ -714,46 +715,61 @@ def _render_categorias_criticas(df, cores):
     st.error(f"**Total Vencido:** {formatar_moeda(total_critico)}")
 
 
-def _render_heatmap_categoria_filial(df, cores):
-    """Heatmap de valores por categoria x filial"""
+def _get_nome_grupo(cod_filial):
+    """Retorna o nome do grupo a partir do codigo da filial"""
+    grupo_id = get_grupo_filial(int(cod_filial))
+    return GRUPOS_FILIAIS.get(grupo_id, f"Grupo {grupo_id}")
 
-    st.markdown("##### Categoria x Filial")
+
+def _detectar_multiplos_grupos(df):
+    """Detecta se o dataframe contem filiais de multiplos grupos"""
+    if 'FILIAL' not in df.columns or len(df) == 0:
+        return False
+    grupos = df['FILIAL'].dropna().apply(lambda x: get_grupo_filial(int(x))).nunique()
+    return grupos > 1
+
+
+def _get_label_filial(row):
+    """Retorna label curta da filial: codigo + sufixo do nome"""
+    cod = str(int(row['FILIAL'])) if pd.notna(row.get('FILIAL')) else ''
+    nome = str(row.get('NOME_FILIAL', ''))
+    partes = nome.split(' - ')
+    sufixo = partes[-1].strip() if len(partes) > 1 else nome.strip()
+    return f"{cod} - {sufixo}" if cod else sufixo
+
+
+def _render_heatmap_categoria_filial(df, cores):
+    """Heatmap de valores por categoria x filial/grupo"""
 
     if 'NOME_FILIAL' not in df.columns:
         st.info("Coluna NOME_FILIAL nao disponivel")
         return
 
+    multiplos_grupos = _detectar_multiplos_grupos(df)
+
     # Top 8 categorias
     top_cats = df.groupby('DESCRICAO')['VALOR_ORIGINAL'].sum().nlargest(8).index.tolist()
-    df_heat = df[df['DESCRICAO'].isin(top_cats)]
+    df_heat = df[df['DESCRICAO'].isin(top_cats)].copy()
+
+    if multiplos_grupos:
+        st.markdown("##### Categoria x Grupo")
+        df_heat['GRUPO'] = df_heat['FILIAL'].apply(lambda x: _get_nome_grupo(x))
+        col_agrup = 'GRUPO'
+    else:
+        st.markdown("##### Categoria x Filial")
+        df_heat['FILIAL_LABEL'] = df_heat.apply(_get_label_filial, axis=1)
+        col_agrup = 'FILIAL_LABEL'
 
     # Pivot
-    df_pivot = df_heat.groupby(['DESCRICAO', 'NOME_FILIAL'])['VALOR_ORIGINAL'].sum().unstack(fill_value=0)
+    df_pivot = df_heat.groupby(['DESCRICAO', col_agrup])['VALOR_ORIGINAL'].sum().unstack(fill_value=0)
 
     if len(df_pivot) == 0 or len(df_pivot.columns) == 0:
         st.info("Dados insuficientes para heatmap")
         return
 
-    # Padronizar nomes das filiais
-    def _padronizar_filial(nome):
-        if pd.isna(nome):
-            return nome
-        nome = str(nome).upper()
-        if 'AGROINDUSTRIAL' in nome and 'GO' in nome:
-            return 'Progresso GO'
-        elif 'AGROINDUSTRIAL' in nome and 'MT' in nome:
-            return 'Progresso MT'
-        elif 'BRASIL AGRICOLA' in nome or 'BRASILAGRICOLA' in nome:
-            return 'Brasil Agricola'
-        elif 'FAZENDA' in nome:
-            return 'Fazenda'
-        return nome[:15]
-
-    colunas_format = [_padronizar_filial(c) for c in df_pivot.columns]
-
     fig = go.Figure(data=go.Heatmap(
         z=df_pivot.values,
-        x=colunas_format,
+        x=[str(c)[:20] for c in df_pivot.columns],
         y=df_pivot.index.str[:20],
         colorscale=[
             [0, cores['card']],
@@ -763,7 +779,7 @@ def _render_heatmap_categoria_filial(df, cores):
         text=[[formatar_moeda(v) for v in row] for row in df_pivot.values],
         texttemplate="%{text}",
         textfont=dict(size=8),
-        hovertemplate="Categoria: %{y}<br>Filial: %{x}<br>Valor: %{text}<extra></extra>"
+        hovertemplate="Categoria: %{y}<br>" + ("Grupo" if multiplos_grupos else "Filial") + ": %{x}<br>Valor: %{text}<extra></extra>"
     ))
 
     fig.update_layout(

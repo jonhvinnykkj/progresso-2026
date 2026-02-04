@@ -21,6 +21,7 @@ TIPOS_DESC = {
     'NCC': 'Nota de Credito ao Cliente',
     'RC': 'Recibo',
     'FT': 'Fatura',
+    'FAT': 'Faturamento (excluido)',
     'PR': 'Provisao',
     'OP': 'Ordem de Pagamento',
     'NCF': 'Nota de Credito Fornecedor',

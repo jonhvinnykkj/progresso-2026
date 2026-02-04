@@ -9,6 +9,19 @@ from datetime import datetime
 from config.theme import get_cores
 from components.charts import criar_layout
 from utils.formatters import formatar_moeda, formatar_numero
+from config.settings import GRUPOS_FILIAIS, get_grupo_filial
+
+
+def _get_nome_grupo(cod_filial):
+    grupo_id = get_grupo_filial(int(cod_filial))
+    return GRUPOS_FILIAIS.get(grupo_id, f"Grupo {grupo_id}")
+
+
+def _detectar_multiplos_grupos(df):
+    if 'FILIAL' not in df.columns or len(df) == 0:
+        return False
+    grupos = df['FILIAL'].dropna().apply(lambda x: get_grupo_filial(int(x))).nunique()
+    return grupos > 1
 
 
 def render_juros_cambio(df):
@@ -53,7 +66,7 @@ def _render_secao_juros(df, df_com_juros, cores):
 
     # ========== FILTROS ==========
     st.markdown("##### Filtros")
-    col1, col2, col3, col4 = st.columns(4)
+    col1, col2, col3 = st.columns(3)
 
     with col1:
         # Filtro de categoria
@@ -66,11 +79,6 @@ def _render_secao_juros(df, df_com_juros, cores):
         filtro_fornecedor = st.selectbox("Fornecedor", fornecedores, key="juros_fornecedor")
 
     with col3:
-        # Filtro de filial
-        filiais = ['Todas'] + sorted([str(x) for x in df['NOME_FILIAL'].dropna().unique().tolist()])
-        filtro_filial = st.selectbox("Filial", filiais, key="juros_filial")
-
-    with col4:
         # Filtro de tipo de custo
         tipo_custo = st.selectbox("Tipo de Custo", ["Todos", "Apenas Juros", "Apenas Multas", "Juros + Multas"], key="juros_tipo")
 
@@ -82,9 +90,6 @@ def _render_secao_juros(df, df_com_juros, cores):
 
     if filtro_fornecedor != 'Todos':
         df_filtrado = df_filtrado[df_filtrado['NOME_FORNECEDOR'] == filtro_fornecedor]
-
-    if filtro_filial != 'Todas':
-        df_filtrado = df_filtrado[df_filtrado['NOME_FILIAL'] == filtro_filial]
 
     if tipo_custo == "Apenas Juros":
         df_filtrado = df_filtrado[df_filtrado['VALOR_JUROS'] > 0]
@@ -300,15 +305,40 @@ def _render_secao_juros(df, df_com_juros, cores):
             st.plotly_chart(fig, use_container_width=True)
 
     with col2:
-        st.markdown("##### Por Filial")
+        _usar_grupo_juros = 'FILIAL' in df_filtrado.columns and _detectar_multiplos_grupos(df_filtrado)
 
-        df_fil = df_filtrado.groupby('NOME_FILIAL').agg({
-            'VALOR_JUROS': 'sum',
-            'VALOR_MULTA': 'sum',
-            'VALOR_ORIGINAL': 'sum',
-            'NUMERO': 'count'
-        }).reset_index()
-        df_fil.columns = ['Filial', 'Juros', 'Multa', 'Principal', 'Qtd']
+        if _usar_grupo_juros:
+            st.markdown("##### Por Grupo")
+            df_filtrado_grupo = df_filtrado.copy()
+            df_filtrado_grupo['GRUPO'] = df_filtrado_grupo['FILIAL'].apply(_get_nome_grupo)
+            df_fil = df_filtrado_grupo.groupby('GRUPO').agg({
+                'VALOR_JUROS': 'sum',
+                'VALOR_MULTA': 'sum',
+                'VALOR_ORIGINAL': 'sum',
+                'NUMERO': 'count'
+            }).reset_index()
+            df_fil.columns = ['Filial', 'Juros', 'Multa', 'Principal', 'Qtd']
+        else:
+            st.markdown("##### Por Filial")
+            if 'FILIAL' in df_filtrado.columns and 'NOME_FILIAL' in df_filtrado.columns:
+                df_filtrado_fil = df_filtrado.copy()
+                df_filtrado_fil['_LABEL'] = df_filtrado_fil['FILIAL'].astype(int).astype(str) + ' - ' + df_filtrado_fil['NOME_FILIAL'].str.split(' - ').str[-1].str.strip()
+                df_fil = df_filtrado_fil.groupby('_LABEL').agg({
+                    'VALOR_JUROS': 'sum',
+                    'VALOR_MULTA': 'sum',
+                    'VALOR_ORIGINAL': 'sum',
+                    'NUMERO': 'count'
+                }).reset_index()
+                df_fil.columns = ['Filial', 'Juros', 'Multa', 'Principal', 'Qtd']
+            else:
+                df_fil = df_filtrado.groupby('NOME_FILIAL').agg({
+                    'VALOR_JUROS': 'sum',
+                    'VALOR_MULTA': 'sum',
+                    'VALOR_ORIGINAL': 'sum',
+                    'NUMERO': 'count'
+                }).reset_index()
+                df_fil.columns = ['Filial', 'Juros', 'Multa', 'Principal', 'Qtd']
+
         df_fil['Total'] = df_fil['Juros'] + df_fil['Multa']
         df_fil['% Custo'] = (df_fil['Total'] / df_fil['Principal'] * 100).round(2)
         df_fil = df_fil[df_fil['Total'] > 0].sort_values('Total', ascending=False)
@@ -559,7 +589,7 @@ def _render_secao_cambio(df, df_dolar, df_real, cores):
 
     # ========== FILTROS ==========
     st.markdown("##### Filtros")
-    col1, col2, col3, col4 = st.columns(4)
+    col1, col2, col3 = st.columns(3)
 
     with col1:
         # Filtro de categoria
@@ -572,11 +602,6 @@ def _render_secao_cambio(df, df_dolar, df_real, cores):
         filtro_fornecedor = st.selectbox("Fornecedor", fornecedores, key="dolar_fornecedor")
 
     with col3:
-        # Filtro de filial
-        filiais = ['Todas'] + sorted([str(x) for x in df_dolar['NOME_FILIAL'].dropna().unique().tolist()])
-        filtro_filial = st.selectbox("Filial", filiais, key="dolar_filial")
-
-    with col4:
         # Filtro de status
         status_opcoes = ['Todos', 'Pendentes', 'Pagos', 'Vencidos']
         filtro_status = st.selectbox("Status", status_opcoes, key="dolar_status")
@@ -589,9 +614,6 @@ def _render_secao_cambio(df, df_dolar, df_real, cores):
 
     if filtro_fornecedor != 'Todos':
         df_filtrado = df_filtrado[df_filtrado['NOME_FORNECEDOR'] == filtro_fornecedor]
-
-    if filtro_filial != 'Todas':
-        df_filtrado = df_filtrado[df_filtrado['NOME_FILIAL'] == filtro_filial]
 
     if filtro_status == 'Pendentes':
         df_filtrado = df_filtrado[df_filtrado['SALDO'] > 0]
@@ -787,35 +809,63 @@ def _render_secao_cambio(df, df_dolar, df_real, cores):
         st.plotly_chart(fig, use_container_width=True)
 
     with col2:
-        st.markdown("##### Por Filial")
+        _usar_grupo_cambio = 'FILIAL' in df_filtrado.columns and _detectar_multiplos_grupos(df_filtrado)
 
-        df_fil = df_filtrado.groupby('NOME_FILIAL').agg({
-            'VALOR_ORIGINAL': 'sum',
-            'VALOR_REAL': 'sum',
-            'TX_MOEDA': 'mean',
-            'SALDO': 'sum',
-            'NUMERO': 'count'
-        }).reset_index()
-        df_fil.columns = ['Filial', 'USD', 'BRL', 'Taxa Media', 'Saldo', 'Qtd']
+        if _usar_grupo_cambio:
+            st.markdown("##### Por Grupo")
+            df_filtrado_grupo = df_filtrado.copy()
+            df_filtrado_grupo['GRUPO'] = df_filtrado_grupo['FILIAL'].apply(_get_nome_grupo)
+            df_fil = df_filtrado_grupo.groupby('GRUPO').agg({
+                'VALOR_ORIGINAL': 'sum',
+                'VALOR_REAL': 'sum',
+                'TX_MOEDA': 'mean',
+                'SALDO': 'sum',
+                'NUMERO': 'count'
+            }).reset_index()
+            df_fil.columns = ['Filial', 'USD', 'BRL', 'Taxa Media', 'Saldo', 'Qtd']
+        else:
+            st.markdown("##### Por Filial")
+            if 'FILIAL' in df_filtrado.columns and 'NOME_FILIAL' in df_filtrado.columns:
+                df_filtrado_fil = df_filtrado.copy()
+                df_filtrado_fil['_LABEL'] = df_filtrado_fil['FILIAL'].astype(int).astype(str) + ' - ' + df_filtrado_fil['NOME_FILIAL'].str.split(' - ').str[-1].str.strip()
+                df_fil = df_filtrado_fil.groupby('_LABEL').agg({
+                    'VALOR_ORIGINAL': 'sum',
+                    'VALOR_REAL': 'sum',
+                    'TX_MOEDA': 'mean',
+                    'SALDO': 'sum',
+                    'NUMERO': 'count'
+                }).reset_index()
+                df_fil.columns = ['Filial', 'USD', 'BRL', 'Taxa Media', 'Saldo', 'Qtd']
+            else:
+                df_fil = df_filtrado.groupby('NOME_FILIAL').agg({
+                    'VALOR_ORIGINAL': 'sum',
+                    'VALOR_REAL': 'sum',
+                    'TX_MOEDA': 'mean',
+                    'SALDO': 'sum',
+                    'NUMERO': 'count'
+                }).reset_index()
+                df_fil.columns = ['Filial', 'USD', 'BRL', 'Taxa Media', 'Saldo', 'Qtd']
+
         df_fil = df_fil.sort_values('USD', ascending=False)
 
-        fig = go.Figure(go.Pie(
-            labels=df_fil['Filial'].str[:20],
-            values=df_fil['USD'],
-            hole=0.4,
-            textinfo='percent',
-            textfont=dict(size=9),
-            hovertemplate='<b>%{label}</b><br>$ %{value:,.2f}<br>%{percent}<extra></extra>'
-        ))
+        if len(df_fil) > 0:
+            fig = go.Figure(go.Pie(
+                labels=df_fil['Filial'].str[:20],
+                values=df_fil['USD'],
+                hole=0.4,
+                textinfo='percent',
+                textfont=dict(size=9),
+                hovertemplate='<b>%{label}</b><br>$ %{value:,.2f}<br>%{percent}<extra></extra>'
+            ))
 
-        fig.update_layout(
-            criar_layout(350),
-            showlegend=True,
-            legend=dict(orientation='v', yanchor='middle', y=0.5, xanchor='left', x=1.02, font=dict(size=8)),
-            margin=dict(l=10, r=120, t=10, b=10)
-        )
+            fig.update_layout(
+                criar_layout(350),
+                showlegend=True,
+                legend=dict(orientation='v', yanchor='middle', y=0.5, xanchor='left', x=1.02, font=dict(size=8)),
+                margin=dict(l=10, r=120, t=10, b=10)
+            )
 
-        st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, use_container_width=True)
 
     st.divider()
 

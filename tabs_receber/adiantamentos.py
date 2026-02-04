@@ -10,6 +10,7 @@ from datetime import datetime, timedelta
 from config.theme import get_cores
 from components.charts import criar_layout
 from utils.formatters import formatar_moeda, formatar_numero
+from config.settings import GRUPOS_FILIAIS, get_grupo_filial
 
 
 def render_adiantamentos_receber(df_adiant, df_baixas):
@@ -37,6 +38,12 @@ def render_adiantamentos_receber(df_adiant, df_baixas):
     # Preparar dados
     df_ad = df_adiant.copy()
     df_bx = df_baixas.copy() if len(df_baixas) > 0 else pd.DataFrame()
+
+    # Correlacionar baixas com adiantamentos (so manter baixas que tem adiantamento correspondente)
+    if len(df_ad) > 0 and len(df_bx) > 0 and 'FILIAL' in df_ad.columns and 'NUMERO' in df_ad.columns:
+        chaves_ad = set(zip(df_ad['FILIAL'], df_ad['NUMERO'].astype(str)))
+        mask_match = df_bx.apply(lambda r: (r['FILIAL'], str(r['NUMERO'])) in chaves_ad, axis=1)
+        df_bx = df_bx[mask_match].copy()
 
     # Converter datas
     for col in ['EMISSAO', 'VENCIMENTO']:
@@ -471,7 +478,7 @@ def _render_conciliacao(df_ad, df_bx, col_cliente, cores, hoje):
         df_show = df_show.sort_values(col_cliente)
 
     # Tabela
-    colunas = ['NOME_FILIAL', col_cliente, 'EMISSAO', 'VALOR_ORIGINAL', 'SALDO']
+    colunas = ['NOME_FILIAL', col_cliente, 'NUMERO', 'EMISSAO', 'VALOR_ORIGINAL', 'SALDO']
     if 'DIAS_PENDENTE' in df_show.columns:
         colunas.append('DIAS_PENDENTE')
 
@@ -486,6 +493,7 @@ def _render_conciliacao(df_ad, df_bx, col_cliente, cores, hoje):
     nomes = {
         'NOME_FILIAL': 'Filial',
         col_cliente: 'Cliente',
+        'NUMERO': 'NF/Doc',
         'EMISSAO': 'Data',
         'VALOR_ORIGINAL': 'Valor Original',
         'SALDO': 'Saldo',
@@ -498,16 +506,50 @@ def _render_conciliacao(df_ad, df_bx, col_cliente, cores, hoje):
     st.caption(f"Exibindo {len(df_tabela)} de {len(df_pendentes)} adiantamentos pendentes")
 
 
-def _render_por_filial(df_ad, cores):
-    """Analise por filial"""
+def _get_nome_grupo(cod_filial):
+    """Retorna o nome do grupo a partir do codigo da filial"""
+    grupo_id = get_grupo_filial(int(cod_filial))
+    return GRUPOS_FILIAIS.get(grupo_id, f"Grupo {grupo_id}")
 
-    st.markdown("##### Adiantamentos por Filial")
+
+def _detectar_multiplos_grupos(df):
+    """Detecta se o dataframe contem filiais de multiplos grupos"""
+    if 'FILIAL' not in df.columns or len(df) == 0:
+        return False
+    grupos = df['FILIAL'].dropna().apply(lambda x: get_grupo_filial(int(x))).nunique()
+    return grupos > 1
+
+
+def _get_label_filial(row):
+    """Retorna label curta da filial: codigo + sufixo do nome"""
+    cod = str(int(row['FILIAL'])) if pd.notna(row.get('FILIAL')) else ''
+    nome = str(row.get('NOME_FILIAL', ''))
+    partes = nome.split(' - ')
+    sufixo = partes[-1].strip() if len(partes) > 1 else nome.strip()
+    return f"{cod} - {sufixo}" if cod else sufixo
+
+
+def _render_por_filial(df_ad, cores):
+    """Analise por filial ou grupo (deteccao automatica)"""
 
     if 'NOME_FILIAL' not in df_ad.columns:
         st.info("Coluna NOME_FILIAL nao disponivel")
         return
 
-    df_fil = df_ad.groupby('NOME_FILIAL').agg({
+    multiplos_grupos = _detectar_multiplos_grupos(df_ad)
+
+    if multiplos_grupos:
+        st.markdown("##### Adiantamentos por Grupo")
+        df_ad_temp = df_ad.copy()
+        df_ad_temp['GRUPO'] = df_ad_temp['FILIAL'].apply(lambda x: _get_nome_grupo(x))
+        col_agrup = 'GRUPO'
+    else:
+        st.markdown("##### Adiantamentos por Filial")
+        df_ad_temp = df_ad.copy()
+        df_ad_temp['FILIAL_LABEL'] = df_ad_temp.apply(_get_label_filial, axis=1)
+        col_agrup = 'FILIAL_LABEL'
+
+    df_fil = df_ad_temp.groupby(col_agrup).agg({
         'VALOR_ORIGINAL': 'sum',
         'SALDO': 'sum',
         'EMISSAO': 'count'
@@ -524,14 +566,14 @@ def _render_por_filial(df_ad, cores):
         fig = go.Figure()
 
         fig.add_trace(go.Bar(
-            x=df_fil['Filial'].str[:15],
+            x=df_fil['Filial'].str[:20],
             y=df_fil['Compensado'],
             name='Compensado',
             marker_color=cores['sucesso']
         ))
 
         fig.add_trace(go.Bar(
-            x=df_fil['Filial'].str[:15],
+            x=df_fil['Filial'].str[:20],
             y=df_fil['Pendente'],
             name='Pendente',
             marker_color=cores['alerta']
@@ -547,13 +589,13 @@ def _render_por_filial(df_ad, cores):
         st.plotly_chart(fig, use_container_width=True)
 
     with col2:
-        # Taxa de compensacao por filial
+        # Taxa de compensacao por filial/grupo
         df_fil_ord = df_fil.sort_values('Taxa', ascending=True)
 
         cores_barra = [cores['sucesso'] if t >= 70 else cores['alerta'] if t >= 50 else cores['perigo'] for t in df_fil_ord['Taxa']]
 
         fig = go.Figure(go.Bar(
-            y=df_fil_ord['Filial'].str[:15],
+            y=df_fil_ord['Filial'].str[:20],
             x=df_fil_ord['Taxa'],
             orientation='h',
             marker_color=cores_barra,
@@ -690,7 +732,7 @@ def _render_historico_cliente(df_ad, df_bx, col_cliente, cores):
     # Lista de adiantamentos do cliente
     st.markdown("##### Adiantamentos do Cliente")
 
-    colunas = ['NOME_FILIAL', 'EMISSAO', 'VALOR_ORIGINAL', 'SALDO']
+    colunas = ['NOME_FILIAL', 'NUMERO', 'EMISSAO', 'VALOR_ORIGINAL', 'SALDO']
     colunas_disp = [c for c in colunas if c in df_cliente.columns]
 
     df_tabela = df_cliente[colunas_disp].sort_values('EMISSAO', ascending=False).copy()
@@ -700,6 +742,13 @@ def _render_historico_cliente(df_ad, df_bx, col_cliente, cores):
     df_tabela['VALOR_ORIGINAL'] = df_tabela['VALOR_ORIGINAL'].apply(lambda x: formatar_moeda(x, completo=True))
     df_tabela['SALDO'] = df_tabela['SALDO'].apply(lambda x: formatar_moeda(x, completo=True))
 
-    df_tabela.columns = ['Filial', 'Data', 'Valor', 'Saldo']
+    nomes = {
+        'NOME_FILIAL': 'Filial',
+        'NUMERO': 'NF/Doc',
+        'EMISSAO': 'Data',
+        'VALOR_ORIGINAL': 'Valor',
+        'SALDO': 'Saldo'
+    }
+    df_tabela.columns = [nomes.get(c, c) for c in df_tabela.columns]
 
     st.dataframe(df_tabela, use_container_width=True, hide_index=True, height=250)

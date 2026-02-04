@@ -3,6 +3,7 @@ Intercompany - Visao Unificada A Pagar + A Receber
 Dashboard Financeiro - Grupo Progresso
 """
 import streamlit as st
+import pandas as pd
 import warnings
 warnings.filterwarnings('ignore')
 
@@ -15,16 +16,6 @@ st.set_page_config(
 
 from auth import verificar_autenticacao
 if not verificar_autenticacao():
-    st.stop()
-
-if st.session_state.get('admin_painel'):
-    from auth.admin import render_admin_usuarios
-    from config.theme import get_css
-    st.markdown(get_css(), unsafe_allow_html=True)
-    if st.button("Voltar ao Dashboard", type="primary"):
-        st.session_state.admin_painel = False
-        st.rerun()
-    render_admin_usuarios()
     st.stop()
 
 from datetime import datetime
@@ -46,7 +37,7 @@ def main():
     # Navbar com filtro de tempo (ignora filtro de filial por enquanto)
     navbar_result = render_navbar(pagina_atual='intercompany', mostrar_filtro_tempo=True)
 
-    # Datas do filtro (3 valores: data_inicio, data_fim, filtro_filial)
+    # Datas do filtro (3 valores: data_inicio, data_fim, filtro_filiais)
     if navbar_result:
         data_inicio, data_fim, _ = navbar_result
     else:
@@ -56,10 +47,12 @@ def main():
     df_pagar, df_receber = carregar_dados_intercompany()
 
     # Aplicar filtro de data
+    ts_inicio = pd.Timestamp(data_inicio)
+    ts_fim = pd.Timestamp(data_fim) + pd.Timedelta(days=1) - pd.Timedelta(seconds=1)
     if 'EMISSAO' in df_pagar.columns:
-        df_pagar = df_pagar[(df_pagar['EMISSAO'].dt.date >= data_inicio) & (df_pagar['EMISSAO'].dt.date <= data_fim)]
+        df_pagar = df_pagar[(df_pagar['EMISSAO'] >= ts_inicio) & (df_pagar['EMISSAO'] <= ts_fim)]
     if 'EMISSAO' in df_receber.columns:
-        df_receber = df_receber[(df_receber['EMISSAO'].dt.date >= data_inicio) & (df_receber['EMISSAO'].dt.date <= data_fim)]
+        df_receber = df_receber[(df_receber['EMISSAO'] >= ts_inicio) & (df_receber['EMISSAO'] <= ts_fim)]
 
     hoje = datetime.now()
 
