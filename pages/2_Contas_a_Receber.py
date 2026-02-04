@@ -18,6 +18,7 @@ if not verificar_autenticacao():
     st.stop()
 
 from datetime import datetime
+import pandas as pd
 
 from config.theme import get_cores, get_css
 from config.settings import INTERCOMPANY_PATTERNS, TIPOS_EXCLUIDOS, CACHE_TTL
@@ -259,6 +260,17 @@ def main():
                 df_adiant_filtrado = df_adiant_filtrado[df_adiant_filtrado['FILIAL'].isin(filtro_filiais)]
             if 'FILIAL' in df_baixas_filtrado.columns:
                 df_baixas_filtrado = df_baixas_filtrado[df_baixas_filtrado['FILIAL'].isin(filtro_filiais)]
+
+        # Aplicar filtro de data (mesmo criterio das outras abas)
+        if 'EMISSAO' in df_adiant_filtrado.columns:
+            df_adiant_filtrado = df_adiant_filtrado[
+                (pd.to_datetime(df_adiant_filtrado['EMISSAO'], errors='coerce').dt.date >= data_inicio) &
+                (pd.to_datetime(df_adiant_filtrado['EMISSAO'], errors='coerce').dt.date <= data_fim)
+            ]
+        if 'DT_BAIXA' in df_baixas_filtrado.columns:
+            df_baixas_filtrado = df_baixas_filtrado[
+                pd.to_datetime(df_baixas_filtrado['DT_BAIXA'], errors='coerce').dt.date <= data_fim
+            ]
 
         render_adiantamentos_receber(df_adiant_filtrado, df_baixas_filtrado)
 

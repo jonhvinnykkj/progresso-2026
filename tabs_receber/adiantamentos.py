@@ -1,6 +1,6 @@
 """
 Aba Adiantamentos - Contas a Receber
-Foco: Conciliacao | Fluxo de Caixa | Analise de Clientes
+Layout flat alinhado com tabs/adiantamentos.py (espelho pagar -> receber)
 """
 import streamlit as st
 import pandas as pd
@@ -14,32 +14,15 @@ from config.settings import GRUPOS_FILIAIS, get_grupo_filial
 
 
 def render_adiantamentos_receber(df_adiant, df_baixas):
-    """Renderiza a aba de Adiantamentos a Receber"""
+    """Renderiza a aba de Adiantamentos a Receber (layout flat)"""
     cores = get_cores()
     hoje = datetime.now()
 
-    # ========== HEADER ==========
-    st.markdown(f"""
-    <div style="background: linear-gradient(135deg, {cores['card']}, {cores['fundo']});
-                border-left: 4px solid {cores['info']}; border-radius: 0 10px 10px 0;
-                padding: 1rem; margin-bottom: 1rem;">
-        <h4 style="color: {cores['texto']}; margin: 0;">Adiantamentos de Clientes</h4>
-        <p style="color: {cores['texto_secundario']}; font-size: 0.8rem; margin: 0.25rem 0 0 0;">
-            Conciliacao | Fluxo de Caixa | Analise de Clientes
-        </p>
-    </div>
-    """, unsafe_allow_html=True)
-
-    # Verificar dados
-    if len(df_adiant) == 0:
-        st.warning("Nenhum dado de adiantamentos disponivel.")
-        return
-
-    # Preparar dados
-    df_ad = df_adiant.copy()
+    # ========== PREPARAR DADOS ==========
+    df_ad = df_adiant.copy() if len(df_adiant) > 0 else pd.DataFrame()
     df_bx = df_baixas.copy() if len(df_baixas) > 0 else pd.DataFrame()
 
-    # Correlacionar baixas com adiantamentos (so manter baixas que tem adiantamento correspondente)
+    # Correlacionar baixas com adiantamentos
     if len(df_ad) > 0 and len(df_bx) > 0 and 'FILIAL' in df_ad.columns and 'NUMERO' in df_ad.columns:
         chaves_ad = set(zip(df_ad['FILIAL'], df_ad['NUMERO'].astype(str)))
         mask_match = df_bx.apply(lambda r: (r['FILIAL'], str(r['NUMERO'])) in chaves_ad, axis=1)
@@ -47,464 +30,82 @@ def render_adiantamentos_receber(df_adiant, df_baixas):
 
     # Converter datas
     for col in ['EMISSAO', 'VENCIMENTO']:
-        if col in df_ad.columns:
+        if len(df_ad) > 0 and col in df_ad.columns:
             df_ad[col] = pd.to_datetime(df_ad[col], errors='coerce')
     if len(df_bx) > 0 and 'DT_BAIXA' in df_bx.columns:
         df_bx['DT_BAIXA'] = pd.to_datetime(df_bx['DT_BAIXA'], errors='coerce')
 
-    # Identificar coluna de cliente
-    col_cliente = 'NOME_FORNECEDOR' if 'NOME_FORNECEDOR' in df_ad.columns else 'NOME_CLIENTE'
+    # Identificar coluna de cliente (NOME_FORNECEDOR ou NOME_CLIENTE)
+    col_cliente = 'NOME_FORNECEDOR' if 'NOME_FORNECEDOR' in df_ad.columns else 'NOME_CLIENTE' if 'NOME_CLIENTE' in df_ad.columns else None
 
-    # ========== PAINEL DE STATUS ==========
-    _render_painel_status(df_ad, df_bx, cores)
+    if len(df_ad) == 0:
+        st.info("Nenhum adiantamento encontrado no periodo.")
+        return
+
+    # Calcular dias pendente
+    if 'EMISSAO' in df_ad.columns:
+        df_ad['DIAS_PENDENTE'] = (hoje - df_ad['EMISSAO']).dt.days
+
+    # Calcular totais gerais
+    total_adiantado = df_ad['VALOR_ORIGINAL'].sum()
+    saldo_pendente = df_ad['SALDO'].sum() if 'SALDO' in df_ad.columns else 0
+    total_compensado = total_adiantado - saldo_pendente
+    qtd_pendentes = len(df_ad[df_ad['SALDO'] > 0]) if 'SALDO' in df_ad.columns else 0
+
+    prazo_medio = 0
+    if len(df_bx) > 0 and 'DIF_DIAS_EMIS_BAIXA' in df_bx.columns:
+        prazo_medio = pd.to_numeric(df_bx['DIF_DIAS_EMIS_BAIXA'], errors='coerce').mean()
+
+    # ========== 1. KPIs PRINCIPAIS ==========
+    col1, col2, col3, col4, col5 = st.columns(5)
+
+    col1.metric("Total Adiantado", formatar_moeda(total_adiantado), f"{len(df_ad)} registros")
+    col2.metric("Compensado", formatar_moeda(total_compensado),
+                f"{(total_compensado/total_adiantado*100):.1f}%" if total_adiantado > 0 else "0%")
+    col3.metric("Saldo Pendente", formatar_moeda(saldo_pendente), f"{qtd_pendentes} titulos")
+    col4.metric("Taxa Compensacao",
+                f"{(total_compensado/total_adiantado*100):.1f}%" if total_adiantado > 0 else "0%")
+    col5.metric("Prazo Medio", f"{prazo_medio:.0f} dias", "adiantamento -> baixa")
 
     st.divider()
 
-    # ========== FLUXO DE CAIXA ==========
-    _render_fluxo_caixa(df_ad, df_bx, cores)
+    # ========== 2. FLUXO MENSAL ==========
+    _render_fluxo_mensal(df_ad, df_bx, cores, hoje)
 
     st.divider()
 
-    # ========== ANALISE DE CLIENTES ==========
-    col1, col2 = st.columns(2)
-
-    with col1:
-        _render_top_clientes(df_ad, col_cliente, cores)
-
-    with col2:
-        _render_comportamento_clientes(df_ad, df_bx, col_cliente, cores)
+    # ========== 3. TOP 10 CLIENTES ==========
+    _render_top_clientes(df_ad, col_cliente, cores)
 
     st.divider()
 
-    # ========== CONCILIACAO ==========
-    _render_conciliacao(df_ad, df_bx, col_cliente, cores, hoje)
+    # ========== 4. AGING ==========
+    _render_aging(df_ad, cores, hoje)
 
     st.divider()
 
-    # ========== POR FILIAL ==========
+    # ========== 5. POR FILIAL/GRUPO ==========
     _render_por_filial(df_ad, cores)
 
     st.divider()
 
-    # ========== HISTORICO DO CLIENTE ==========
-    _render_historico_cliente(df_ad, df_bx, col_cliente, cores)
+    # ========== 6. PRAZOS DE COMPENSACAO ==========
+    _render_prazos(df_bx, cores)
 
+    st.divider()
 
-def _render_painel_status(df_ad, df_bx, cores):
-    """Painel de status dos adiantamentos"""
+    # ========== 7. CONSULTA CLIENTE ==========
+    _render_consulta_cliente(df_ad, df_bx, col_cliente, cores)
 
-    total_adiantado = df_ad['VALOR_ORIGINAL'].sum()
-    total_pendente = df_ad['SALDO'].sum() if 'SALDO' in df_ad.columns else total_adiantado
-    total_compensado = total_adiantado - total_pendente
+    st.divider()
 
-    taxa_compensacao = total_compensado / total_adiantado * 100 if total_adiantado > 0 else 0
+    # ========== 8. TABELA RANKING ==========
+    _render_tabela_ranking(df_ad, df_bx, col_cliente, cores)
 
-    qtd_adiantamentos = len(df_ad)
-    qtd_pendentes = len(df_ad[df_ad['SALDO'] > 0]) if 'SALDO' in df_ad.columns else qtd_adiantamentos
 
-    # Calcular valor medio e ticket
-    ticket_medio = total_adiantado / qtd_adiantamentos if qtd_adiantamentos > 0 else 0
-
-    # Status
-    if taxa_compensacao >= 80:
-        status = "SAUDAVEL"
-        cor_status = cores['sucesso']
-    elif taxa_compensacao >= 50:
-        status = "NORMAL"
-        cor_status = cores['info']
-    elif taxa_compensacao >= 30:
-        status = "ATENCAO"
-        cor_status = cores['alerta']
-    else:
-        status = "CRITICO"
-        cor_status = cores['perigo']
-
-    col1, col2, col3, col4, col5 = st.columns([1.5, 1, 1, 1, 1])
-
-    with col1:
-        st.markdown(f"""
-        <div style="background: {cores['card']}; border: 2px solid {cor_status};
-                    border-radius: 10px; padding: 1rem; text-align: center;">
-            <p style="color: {cores['texto_secundario']}; font-size: 0.7rem; margin: 0;">TAXA COMPENSACAO</p>
-            <p style="color: {cor_status}; font-size: 1.8rem; font-weight: 800; margin: 0.25rem 0;">{taxa_compensacao:.0f}%</p>
-            <p style="color: {cores['texto_secundario']}; font-size: 0.7rem; margin: 0;">{status}</p>
-        </div>
-        """, unsafe_allow_html=True)
-
-    with col2:
-        st.metric("Total Adiantado", formatar_moeda(total_adiantado), f"{qtd_adiantamentos} registros")
-
-    with col3:
-        st.metric("Compensado", formatar_moeda(total_compensado), f"{qtd_adiantamentos - qtd_pendentes} quitados")
-
-    with col4:
-        st.metric("Saldo Pendente", formatar_moeda(total_pendente), f"{qtd_pendentes} abertos", delta_color="inverse")
-
-    with col5:
-        st.metric("Ticket Medio", formatar_moeda(ticket_medio))
-
-
-def _render_fluxo_caixa(df_ad, df_bx, cores):
-    """Fluxo de caixa - entradas vs compensacoes"""
-
-    st.markdown(f"""
-    <div style="background: {cores['card']}; border-left: 4px solid {cores['sucesso']};
-                padding: 0.75rem 1rem; border-radius: 0 8px 8px 0; margin-bottom: 1rem;">
-        <h4 style="color: {cores['texto']}; margin: 0;">Fluxo de Caixa - Adiantamentos</h4>
-        <p style="color: {cores['texto_secundario']}; font-size: 0.8rem; margin: 0;">
-            Entrada de adiantamentos vs compensacoes realizadas
-        </p>
-    </div>
-    """, unsafe_allow_html=True)
-
-    if 'EMISSAO' not in df_ad.columns:
-        st.info("Coluna EMISSAO nao disponivel")
-        return
-
-    # Agrupar adiantamentos por mes
-    df_ad_temp = df_ad.copy()
-    df_ad_temp['MES'] = df_ad_temp['EMISSAO'].dt.to_period('M')
-
-    df_entradas = df_ad_temp.groupby('MES').agg({
-        'VALOR_ORIGINAL': 'sum',
-        'SALDO': 'count'
-    }).reset_index()
-    df_entradas.columns = ['Mes', 'Entrada', 'Qtd_Entrada']
-    df_entradas['Mes'] = df_entradas['Mes'].astype(str)
-
-    # Agrupar baixas por mes
-    if len(df_bx) > 0 and 'DT_BAIXA' in df_bx.columns and 'VALOR_BAIXA' in df_bx.columns:
-        df_bx_temp = df_bx.copy()
-        df_bx_temp['MES'] = df_bx_temp['DT_BAIXA'].dt.to_period('M')
-
-        df_saidas = df_bx_temp.groupby('MES').agg({
-            'VALOR_BAIXA': 'sum',
-            'DT_BAIXA': 'count'
-        }).reset_index()
-        df_saidas.columns = ['Mes', 'Saida', 'Qtd_Saida']
-        df_saidas['Mes'] = df_saidas['Mes'].astype(str)
-    else:
-        df_saidas = pd.DataFrame(columns=['Mes', 'Saida', 'Qtd_Saida'])
-
-    # Merge
-    df_fluxo = df_entradas.merge(df_saidas, on='Mes', how='outer').fillna(0)
-    df_fluxo = df_fluxo.sort_values('Mes').tail(12)
-
-    # Calcular saldo acumulado
-    df_fluxo['Liquido'] = df_fluxo['Entrada'] - df_fluxo['Saida']
-    df_fluxo['Acumulado'] = df_fluxo['Liquido'].cumsum()
-
-    col1, col2 = st.columns([2, 1])
-
-    with col1:
-        fig = go.Figure()
-
-        # Barras de entrada
-        fig.add_trace(go.Bar(
-            x=df_fluxo['Mes'],
-            y=df_fluxo['Entrada'],
-            name='Adiantamentos Recebidos',
-            marker_color=cores['sucesso'],
-            text=[formatar_moeda(v) for v in df_fluxo['Entrada']],
-            textposition='outside',
-            textfont=dict(size=8)
-        ))
-
-        # Barras de saida (negativo para visualizacao)
-        fig.add_trace(go.Bar(
-            x=df_fluxo['Mes'],
-            y=-df_fluxo['Saida'],
-            name='Compensacoes',
-            marker_color=cores['alerta'],
-            text=[formatar_moeda(v) for v in df_fluxo['Saida']],
-            textposition='outside',
-            textfont=dict(size=8)
-        ))
-
-        # Linha de saldo acumulado
-        fig.add_trace(go.Scatter(
-            x=df_fluxo['Mes'],
-            y=df_fluxo['Acumulado'],
-            mode='lines+markers',
-            name='Saldo Acumulado',
-            line=dict(color=cores['primaria'], width=3),
-            marker=dict(size=8),
-            yaxis='y2'
-        ))
-
-        fig.update_layout(
-            criar_layout(320, barmode='relative'),
-            yaxis=dict(title='Valor Mensal'),
-            yaxis2=dict(title='Acumulado', overlaying='y', side='right', showgrid=False),
-            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1, font=dict(size=9)),
-            margin=dict(l=10, r=50, t=40, b=60),
-            xaxis_tickangle=-45
-        )
-
-        st.plotly_chart(fig, use_container_width=True)
-
-    with col2:
-        st.markdown("##### Resumo do Periodo")
-
-        total_entradas = df_fluxo['Entrada'].sum()
-        total_saidas = df_fluxo['Saida'].sum()
-        saldo = total_entradas - total_saidas
-
-        st.metric("Entradas (12m)", formatar_moeda(total_entradas))
-        st.metric("Compensacoes (12m)", formatar_moeda(total_saidas))
-
-        cor_saldo = cores['sucesso'] if saldo > 0 else cores['perigo']
-        st.markdown(f"""
-        <div style="background: {cores['card']}; border: 1px solid {cor_saldo};
-                    border-radius: 8px; padding: 0.75rem; text-align: center; margin-top: 0.5rem;">
-            <p style="color: {cores['texto_secundario']}; font-size: 0.7rem; margin: 0;">SALDO LIQUIDO</p>
-            <p style="color: {cor_saldo}; font-size: 1.3rem; font-weight: 700; margin: 0;">{formatar_moeda(saldo)}</p>
-        </div>
-        """, unsafe_allow_html=True)
-
-        # Media mensal
-        media_entrada = total_entradas / len(df_fluxo) if len(df_fluxo) > 0 else 0
-        media_saida = total_saidas / len(df_fluxo) if len(df_fluxo) > 0 else 0
-
-        st.caption(f"Media/mes: +{formatar_moeda(media_entrada)} | -{formatar_moeda(media_saida)}")
-
-
-def _render_top_clientes(df_ad, col_cliente, cores):
-    """Top clientes com adiantamentos"""
-
-    st.markdown("##### Top 10 Clientes - Saldo Pendente")
-
-    df_cli = df_ad.groupby(col_cliente).agg({
-        'VALOR_ORIGINAL': 'sum',
-        'SALDO': 'sum',
-        'EMISSAO': 'count'
-    }).reset_index()
-    df_cli.columns = [col_cliente, 'Total', 'Pendente', 'Qtd']
-
-    df_cli['Compensado'] = df_cli['Total'] - df_cli['Pendente']
-    df_cli['Taxa'] = (df_cli['Compensado'] / df_cli['Total'] * 100).fillna(0)
-
-    # Top 10 por saldo pendente
-    df_top = df_cli.nlargest(10, 'Pendente')
-
-    if len(df_top) == 0:
-        st.success("Todos os adiantamentos foram compensados!")
-        return
-
-    fig = go.Figure()
-
-    fig.add_trace(go.Bar(
-        y=df_top[col_cliente].str[:20],
-        x=df_top['Compensado'],
-        orientation='h',
-        name='Compensado',
-        marker_color=cores['sucesso'],
-        text=[formatar_moeda(v) for v in df_top['Compensado']],
-        textposition='inside',
-        textfont=dict(size=8, color='white')
-    ))
-
-    fig.add_trace(go.Bar(
-        y=df_top[col_cliente].str[:20],
-        x=df_top['Pendente'],
-        orientation='h',
-        name='Pendente',
-        marker_color=cores['alerta'],
-        text=[formatar_moeda(v) for v in df_top['Pendente']],
-        textposition='inside',
-        textfont=dict(size=8, color='white')
-    ))
-
-    fig.update_layout(
-        criar_layout(320, barmode='stack'),
-        yaxis={'autorange': 'reversed'},
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1, font=dict(size=9)),
-        margin=dict(l=10, r=10, t=40, b=10)
-    )
-
-    st.plotly_chart(fig, use_container_width=True)
-
-
-def _render_comportamento_clientes(df_ad, df_bx, col_cliente, cores):
-    """Analise de comportamento dos clientes"""
-
-    st.markdown("##### Comportamento de Clientes")
-
-    df_cli = df_ad.groupby(col_cliente).agg({
-        'VALOR_ORIGINAL': 'sum',
-        'SALDO': 'sum',
-        'EMISSAO': ['count', 'min', 'max']
-    }).reset_index()
-    df_cli.columns = [col_cliente, 'Total', 'Pendente', 'Qtd', 'Primeiro', 'Ultimo']
-
-    df_cli['Taxa'] = ((df_cli['Total'] - df_cli['Pendente']) / df_cli['Total'] * 100).fillna(0)
-
-    # Classificar comportamento
-    def classificar(row):
-        if row['Taxa'] >= 90:
-            return 'Excelente', cores['sucesso']
-        elif row['Taxa'] >= 70:
-            return 'Bom', cores['info']
-        elif row['Taxa'] >= 50:
-            return 'Regular', '#fbbf24'
-        elif row['Taxa'] >= 30:
-            return 'Ruim', cores['alerta']
-        else:
-            return 'Critico', cores['perigo']
-
-    comportamentos = df_cli.apply(classificar, axis=1)
-    df_cli['Comportamento'] = [c[0] for c in comportamentos]
-
-    # Contar por comportamento
-    df_comp = df_cli.groupby('Comportamento').agg({
-        col_cliente: 'count',
-        'Pendente': 'sum'
-    }).reset_index()
-    df_comp.columns = ['Comportamento', 'Clientes', 'Pendente']
-
-    ordem = ['Excelente', 'Bom', 'Regular', 'Ruim', 'Critico']
-    cores_comp = {
-        'Excelente': cores['sucesso'],
-        'Bom': cores['info'],
-        'Regular': '#fbbf24',
-        'Ruim': cores['alerta'],
-        'Critico': cores['perigo']
-    }
-
-    df_comp['Ordem'] = df_comp['Comportamento'].apply(lambda x: ordem.index(x) if x in ordem else 99)
-    df_comp = df_comp.sort_values('Ordem')
-
-    fig = go.Figure(go.Pie(
-        labels=df_comp['Comportamento'],
-        values=df_comp['Clientes'],
-        marker_colors=[cores_comp.get(c, cores['info']) for c in df_comp['Comportamento']],
-        hole=0.5,
-        textinfo='label+percent',
-        textfont=dict(size=10)
-    ))
-
-    fig.update_layout(
-        criar_layout(280),
-        showlegend=False,
-        margin=dict(l=10, r=10, t=10, b=10)
-    )
-
-    st.plotly_chart(fig, use_container_width=True)
-
-    # Resumo
-    total_cli = df_comp['Clientes'].sum()
-    bons = df_comp[df_comp['Comportamento'].isin(['Excelente', 'Bom'])]['Clientes'].sum()
-    st.caption(f"{bons} de {total_cli} clientes ({bons/total_cli*100:.0f}%) com boa compensacao")
-
-
-def _render_conciliacao(df_ad, df_bx, col_cliente, cores, hoje):
-    """Conciliacao - adiantamentos para compensar"""
-
-    st.markdown(f"""
-    <div style="background: {cores['card']}; border-left: 4px solid {cores['primaria']};
-                padding: 0.75rem 1rem; border-radius: 0 8px 8px 0; margin-bottom: 1rem;">
-        <h4 style="color: {cores['texto']}; margin: 0;">Conciliacao de Adiantamentos</h4>
-        <p style="color: {cores['texto_secundario']}; font-size: 0.8rem; margin: 0;">
-            Adiantamentos pendentes de compensacao
-        </p>
-    </div>
-    """, unsafe_allow_html=True)
-
-    df_pendentes = df_ad[df_ad['SALDO'] > 0].copy() if 'SALDO' in df_ad.columns else df_ad.copy()
-
-    if len(df_pendentes) == 0:
-        st.success("Todos os adiantamentos foram compensados!")
-        return
-
-    # Calcular dias pendente
-    if 'EMISSAO' in df_pendentes.columns:
-        df_pendentes['DIAS_PENDENTE'] = (hoje - df_pendentes['EMISSAO']).dt.days
-
-    # Metricas
-    total_pendente = df_pendentes['SALDO'].sum()
-    qtd_pendente = len(df_pendentes)
-
-    # Aging
-    if 'DIAS_PENDENTE' in df_pendentes.columns:
-        ate_30 = df_pendentes[df_pendentes['DIAS_PENDENTE'] <= 30]['SALDO'].sum()
-        ate_60 = df_pendentes[(df_pendentes['DIAS_PENDENTE'] > 30) & (df_pendentes['DIAS_PENDENTE'] <= 60)]['SALDO'].sum()
-        ate_90 = df_pendentes[(df_pendentes['DIAS_PENDENTE'] > 60) & (df_pendentes['DIAS_PENDENTE'] <= 90)]['SALDO'].sum()
-        mais_90 = df_pendentes[df_pendentes['DIAS_PENDENTE'] > 90]['SALDO'].sum()
-
-        col1, col2, col3, col4, col5 = st.columns(5)
-
-        col1.metric("Total Pendente", formatar_moeda(total_pendente), f"{qtd_pendente} titulos")
-        col2.metric("Ate 30 dias", formatar_moeda(ate_30))
-        col3.metric("31-60 dias", formatar_moeda(ate_60))
-        col4.metric("61-90 dias", formatar_moeda(ate_90), delta_color="inverse" if ate_90 > 0 else "off")
-        col5.metric("+90 dias", formatar_moeda(mais_90), "PRIORIDADE", delta_color="inverse" if mais_90 > 0 else "off")
-
-    st.markdown("---")
-
-    # Filtros
-    col1, col2, col3 = st.columns(3)
-
-    with col1:
-        filiais = ['Todas'] + sorted(df_pendentes['NOME_FILIAL'].dropna().unique().tolist())
-        filtro_filial = st.selectbox("Filial", filiais, key="conc_filial")
-
-    with col2:
-        ordenar = st.selectbox("Ordenar por", ['Maior Valor', 'Mais Antigo', 'Cliente'], key="conc_ordem")
-
-    with col3:
-        faixa = st.selectbox("Faixa de Tempo", ['Todos', 'Ate 30 dias', '31-60 dias', '61-90 dias', '+90 dias'], key="conc_faixa")
-
-    # Aplicar filtros
-    df_show = df_pendentes.copy()
-
-    if filtro_filial != 'Todas':
-        df_show = df_show[df_show['NOME_FILIAL'] == filtro_filial]
-
-    if faixa != 'Todos' and 'DIAS_PENDENTE' in df_show.columns:
-        faixas_map = {
-            'Ate 30 dias': (0, 30),
-            '31-60 dias': (31, 60),
-            '61-90 dias': (61, 90),
-            '+90 dias': (91, 9999)
-        }
-        min_d, max_d = faixas_map.get(faixa, (0, 9999))
-        df_show = df_show[(df_show['DIAS_PENDENTE'] >= min_d) & (df_show['DIAS_PENDENTE'] <= max_d)]
-
-    if ordenar == 'Maior Valor':
-        df_show = df_show.sort_values('SALDO', ascending=False)
-    elif ordenar == 'Mais Antigo':
-        df_show = df_show.sort_values('EMISSAO', ascending=True)
-    else:
-        df_show = df_show.sort_values(col_cliente)
-
-    # Tabela
-    colunas = ['NOME_FILIAL', col_cliente, 'NUMERO', 'EMISSAO', 'VALOR_ORIGINAL', 'SALDO']
-    if 'DIAS_PENDENTE' in df_show.columns:
-        colunas.append('DIAS_PENDENTE')
-
-    df_tabela = df_show[colunas].head(50).copy()
-
-    # Formatar
-    if 'EMISSAO' in df_tabela.columns:
-        df_tabela['EMISSAO'] = df_tabela['EMISSAO'].dt.strftime('%d/%m/%Y')
-    df_tabela['VALOR_ORIGINAL'] = df_tabela['VALOR_ORIGINAL'].apply(lambda x: formatar_moeda(x, completo=True))
-    df_tabela['SALDO'] = df_tabela['SALDO'].apply(lambda x: formatar_moeda(x, completo=True))
-
-    nomes = {
-        'NOME_FILIAL': 'Filial',
-        col_cliente: 'Cliente',
-        'NUMERO': 'NF/Doc',
-        'EMISSAO': 'Data',
-        'VALOR_ORIGINAL': 'Valor Original',
-        'SALDO': 'Saldo',
-        'DIAS_PENDENTE': 'Dias'
-    }
-    df_tabela.columns = [nomes.get(c, c) for c in df_tabela.columns]
-
-    st.dataframe(df_tabela, use_container_width=True, hide_index=True, height=350)
-
-    st.caption(f"Exibindo {len(df_tabela)} de {len(df_pendentes)} adiantamentos pendentes")
-
+# ==========================================================================
+# Helpers
+# ==========================================================================
 
 def _get_nome_grupo(cod_filial):
     """Retorna o nome do grupo a partir do codigo da filial"""
@@ -521,7 +122,7 @@ def _detectar_multiplos_grupos(df):
 
 
 def _get_label_filial(row):
-    """Retorna label curta da filial: codigo + sufixo do nome"""
+    """Retorna label curta da filial"""
     cod = str(int(row['FILIAL'])) if pd.notna(row.get('FILIAL')) else ''
     nome = str(row.get('NOME_FILIAL', ''))
     partes = nome.split(' - ')
@@ -529,226 +130,528 @@ def _get_label_filial(row):
     return f"{cod} - {sufixo}" if cod else sufixo
 
 
+# ==========================================================================
+# Secoes
+# ==========================================================================
+
+def _render_fluxo_mensal(df_ad, df_bx, cores, hoje):
+    """Secao 2 - Fluxo Mensal: Entradas vs Compensacoes"""
+    st.markdown("##### Fluxo Mensal")
+
+    if 'EMISSAO' not in df_ad.columns:
+        st.info("Coluna EMISSAO nao disponivel.")
+        return
+
+    col1, col2 = st.columns([2, 1])
+
+    with col1:
+        df_ad_mes = df_ad.copy()
+        df_ad_mes['MES'] = df_ad_mes['EMISSAO'].dt.to_period('M').astype(str)
+        adiant_mes = df_ad_mes.groupby('MES')['VALOR_ORIGINAL'].sum()
+
+        if len(df_bx) > 0 and 'DT_BAIXA' in df_bx.columns and 'VALOR_BAIXA' in df_bx.columns:
+            df_bx_mes = df_bx.copy()
+            df_bx_mes['MES'] = df_bx_mes['DT_BAIXA'].dt.to_period('M').astype(str)
+            baixa_mes = df_bx_mes.groupby('MES')['VALOR_BAIXA'].sum()
+        else:
+            baixa_mes = pd.Series(dtype=float)
+
+        meses = sorted(set(adiant_mes.index.tolist() + baixa_mes.index.tolist()))[-12:]
+        df_fluxo = pd.DataFrame({
+            'MES': meses,
+            'Adiantado': [adiant_mes.get(m, 0) for m in meses],
+            'Compensado': [baixa_mes.get(m, 0) for m in meses]
+        })
+        df_fluxo['Liquido'] = df_fluxo['Adiantado'] - df_fluxo['Compensado']
+
+        fig = go.Figure()
+        fig.add_trace(go.Bar(
+            x=df_fluxo['MES'], y=df_fluxo['Adiantado'],
+            name='Adiantado', marker_color=cores['sucesso']
+        ))
+        fig.add_trace(go.Bar(
+            x=df_fluxo['MES'], y=-df_fluxo['Compensado'],
+            name='Compensado', marker_color=cores['alerta']
+        ))
+        fig.add_trace(go.Scatter(
+            x=df_fluxo['MES'], y=df_fluxo['Liquido'],
+            name='Liquido', mode='lines+markers',
+            line=dict(color=cores['texto'], width=2, dash='dot'),
+            marker=dict(size=6)
+        ))
+        fig.update_layout(
+            criar_layout(280),
+            barmode='relative',
+            margin=dict(l=10, r=10, t=10, b=50),
+            xaxis=dict(tickangle=-45, tickfont=dict(size=9, color=cores['texto'])),
+            yaxis=dict(showticklabels=False, showgrid=False),
+            legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='right', x=1, font=dict(size=9))
+        )
+        st.plotly_chart(fig, use_container_width=True)
+
+    with col2:
+        st.markdown("###### Ultimos 3 meses")
+        df_3m = df_ad[df_ad['EMISSAO'] >= hoje - timedelta(days=90)]
+        adiant_3m = df_3m['VALOR_ORIGINAL'].sum()
+
+        comp_3m = 0
+        if len(df_bx) > 0 and 'DT_BAIXA' in df_bx.columns and 'VALOR_BAIXA' in df_bx.columns:
+            df_bx_3m = df_bx[df_bx['DT_BAIXA'] >= hoje - timedelta(days=90)]
+            comp_3m = df_bx_3m['VALOR_BAIXA'].sum()
+
+        liquido_3m = adiant_3m - comp_3m
+
+        st.markdown(f"""
+        <div style="padding: 0.5rem 0; border-bottom: 1px solid {cores['borda']};">
+            <span style="color: {cores['texto_secundario']}; font-size: 0.8rem;">Adiantado</span>
+            <span style="color: {cores['sucesso']}; font-size: 0.9rem; font-weight: 600; float: right;">
+                +{formatar_moeda(adiant_3m)}</span>
+        </div>
+        <div style="padding: 0.5rem 0; border-bottom: 1px solid {cores['borda']};">
+            <span style="color: {cores['texto_secundario']}; font-size: 0.8rem;">Compensado</span>
+            <span style="color: {cores['alerta']}; font-size: 0.9rem; font-weight: 600; float: right;">
+                -{formatar_moeda(comp_3m)}</span>
+        </div>
+        <div style="padding: 0.5rem 0;">
+            <span style="color: {cores['texto']}; font-size: 0.85rem; font-weight: 600;">Liquido</span>
+            <span style="color: {cores['perigo'] if liquido_3m > 0 else cores['sucesso']};
+                   font-size: 1rem; font-weight: 700; float: right;">
+                {'+' if liquido_3m > 0 else ''}{formatar_moeda(liquido_3m)}</span>
+        </div>
+        """, unsafe_allow_html=True)
+
+
+def _render_top_clientes(df_ad, col_cliente, cores):
+    """Secao 3 - Top 10 Clientes (stacked bar + donut concentracao)"""
+    st.markdown("##### Top 10 Clientes")
+
+    if col_cliente is None or col_cliente not in df_ad.columns:
+        st.info("Coluna de cliente nao disponivel.")
+        return
+
+    df_cli = df_ad.groupby(col_cliente).agg({
+        'VALOR_ORIGINAL': 'sum',
+        'SALDO': 'sum',
+        'EMISSAO': 'count'
+    }).reset_index()
+    df_cli.columns = ['Cliente', 'Total', 'Pendente', 'Qtd']
+    df_cli['Compensado'] = df_cli['Total'] - df_cli['Pendente']
+    df_cli = df_cli.sort_values('Pendente', ascending=False)
+
+    df_top = df_cli.head(10).sort_values('Pendente', ascending=True)
+
+    if len(df_top) == 0:
+        st.success("Nenhum adiantamento encontrado.")
+        return
+
+    col1, col2 = st.columns([2, 1])
+
+    with col1:
+        fig = go.Figure()
+        fig.add_trace(go.Bar(
+            y=df_top['Cliente'].str[:30], x=df_top['Compensado'],
+            orientation='h', name='Compensado', marker_color=cores['sucesso'],
+            text=[formatar_moeda(v) for v in df_top['Compensado']],
+            textposition='inside', textfont=dict(size=8, color='white')
+        ))
+        fig.add_trace(go.Bar(
+            y=df_top['Cliente'].str[:30], x=df_top['Pendente'],
+            orientation='h', name='Pendente', marker_color=cores['alerta'],
+            text=[formatar_moeda(v) for v in df_top['Pendente']],
+            textposition='inside', textfont=dict(size=8, color='white')
+        ))
+        fig.update_layout(
+            criar_layout(320),
+            barmode='stack',
+            margin=dict(l=10, r=10, t=10, b=10),
+            xaxis=dict(showticklabels=False, showgrid=False),
+            yaxis=dict(tickfont=dict(size=9, color=cores['texto'])),
+            legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='right', x=1, font=dict(size=9))
+        )
+        st.plotly_chart(fig, use_container_width=True)
+
+    with col2:
+        valor_pendente = df_cli['Pendente'].sum()
+        df_pend = df_cli[df_cli['Pendente'] > 0]
+
+        if len(df_pend) > 5:
+            df_donut = df_pend.head(5)[['Cliente', 'Pendente']].copy()
+            outros = df_pend.iloc[5:]['Pendente'].sum()
+            df_donut = pd.concat([df_donut, pd.DataFrame({'Cliente': ['Outros'], 'Pendente': [outros]})], ignore_index=True)
+        else:
+            df_donut = df_pend[['Cliente', 'Pendente']].copy()
+
+        if len(df_donut) > 0:
+            fig = go.Figure(go.Pie(
+                labels=df_donut['Cliente'].str[:20],
+                values=df_donut['Pendente'],
+                hole=0.6,
+                textinfo='percent',
+                textfont=dict(size=9, color=cores['texto'])
+            ))
+            fig.update_layout(
+                criar_layout(280),
+                showlegend=False,
+                margin=dict(l=10, r=10, t=10, b=10),
+                annotations=[dict(
+                    text=f"<b>{formatar_moeda(valor_pendente)}</b><br>Pendente",
+                    x=0.5, y=0.5, font=dict(size=10, color=cores['texto']),
+                    showarrow=False
+                )]
+            )
+            st.plotly_chart(fig, use_container_width=True)
+
+
+def _render_aging(df_ad, cores, hoje):
+    """Secao 4 - Aging: pendentes por faixa de tempo"""
+    st.markdown("##### Aging - Pendentes por Faixa de Tempo")
+
+    if 'SALDO' not in df_ad.columns:
+        st.info("Sem dados de saldo.")
+        return
+
+    df_pend = df_ad[df_ad['SALDO'] > 0].copy()
+    if len(df_pend) == 0:
+        st.success("Nenhum adiantamento pendente!")
+        return
+
+    if 'DIAS_PENDENTE' not in df_pend.columns:
+        df_pend['DIAS_PENDENTE'] = (hoje - df_pend['EMISSAO']).dt.days
+
+    def faixa_aging(dias):
+        if pd.isna(dias) or dias < 0:
+            return 'N/A'
+        dias = int(dias)
+        if dias <= 30:
+            return '0-30d'
+        elif dias <= 60:
+            return '31-60d'
+        elif dias <= 90:
+            return '61-90d'
+        elif dias <= 180:
+            return '91-180d'
+        return '180+d'
+
+    df_pend['FAIXA'] = df_pend['DIAS_PENDENTE'].apply(faixa_aging)
+    ordem = ['0-30d', '31-60d', '61-90d', '91-180d', '180+d']
+    cores_aging = [cores['sucesso'], cores['info'], cores['alerta'], '#f97316', cores['perigo']]
+
+    total_pendente = df_pend['SALDO'].sum()
+    dias_medio = df_pend['DIAS_PENDENTE'].mean()
+    dias_max = df_pend['DIAS_PENDENTE'].max()
+    df_critico = df_pend[df_pend['DIAS_PENDENTE'] > 90]
+    valor_critico = df_critico['SALDO'].sum()
+
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("Valor sem Baixa", formatar_moeda(total_pendente), f"{len(df_pend)} titulos")
+    col2.metric("Tempo Medio", f"{dias_medio:.0f} dias")
+    col3.metric("Mais Antigo", f"{int(dias_max)} dias")
+    col4.metric("Criticos >90d", formatar_moeda(valor_critico), f"{len(df_critico)} titulos")
+
+    df_aging = df_pend.groupby('FAIXA').agg({
+        'SALDO': 'sum',
+        'DIAS_PENDENTE': 'count'
+    }).reindex(ordem, fill_value=0).reset_index()
+    df_aging.columns = ['Faixa', 'Valor', 'Qtd']
+
+    fig = go.Figure()
+    fig.add_trace(go.Bar(
+        y=df_aging['Faixa'], x=df_aging['Valor'],
+        orientation='h', marker_color=cores_aging,
+        text=[f"{formatar_moeda(v)} ({int(q)} tit.)" for v, q in zip(df_aging['Valor'], df_aging['Qtd'])],
+        textposition='outside', textfont=dict(size=9, color=cores['texto'])
+    ))
+    fig.update_layout(
+        criar_layout(250),
+        margin=dict(l=10, r=120, t=10, b=10),
+        xaxis=dict(showticklabels=False, showgrid=False),
+        yaxis=dict(tickfont=dict(size=10, color=cores['texto']), autorange='reversed')
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
+
 def _render_por_filial(df_ad, cores):
-    """Analise por filial ou grupo (deteccao automatica)"""
+    """Secao 5 - Por Filial/Grupo (stacked bar horizontal)"""
 
     if 'NOME_FILIAL' not in df_ad.columns:
-        st.info("Coluna NOME_FILIAL nao disponivel")
         return
 
     multiplos_grupos = _detectar_multiplos_grupos(df_ad)
 
     if multiplos_grupos:
-        st.markdown("##### Adiantamentos por Grupo")
-        df_ad_temp = df_ad.copy()
-        df_ad_temp['GRUPO'] = df_ad_temp['FILIAL'].apply(lambda x: _get_nome_grupo(x))
-        col_agrup = 'GRUPO'
+        st.markdown("##### Por Grupo")
+        df_temp = df_ad.copy()
+        df_temp['_AGRUP'] = df_temp['FILIAL'].apply(lambda x: _get_nome_grupo(x))
     else:
-        st.markdown("##### Adiantamentos por Filial")
-        df_ad_temp = df_ad.copy()
-        df_ad_temp['FILIAL_LABEL'] = df_ad_temp.apply(_get_label_filial, axis=1)
-        col_agrup = 'FILIAL_LABEL'
+        st.markdown("##### Por Filial")
+        df_temp = df_ad.copy()
+        df_temp['_AGRUP'] = df_temp.apply(_get_label_filial, axis=1)
 
-    df_fil = df_ad_temp.groupby(col_agrup).agg({
+    df_fil = df_temp.groupby('_AGRUP').agg({
         'VALOR_ORIGINAL': 'sum',
         'SALDO': 'sum',
         'EMISSAO': 'count'
     }).reset_index()
     df_fil.columns = ['Filial', 'Total', 'Pendente', 'Qtd']
-
     df_fil['Compensado'] = df_fil['Total'] - df_fil['Pendente']
-    df_fil['Taxa'] = (df_fil['Compensado'] / df_fil['Total'] * 100).fillna(0)
     df_fil = df_fil.sort_values('Total', ascending=False)
+
+    df_top = df_fil.head(12).sort_values('Total', ascending=True)
+
+    fig = go.Figure()
+    fig.add_trace(go.Bar(
+        y=df_top['Filial'].str[:22], x=df_top['Compensado'],
+        orientation='h', name='Compensado', marker_color=cores['sucesso'],
+        text=[formatar_moeda(v) for v in df_top['Compensado']],
+        textposition='inside', textfont=dict(size=8, color='white')
+    ))
+    fig.add_trace(go.Bar(
+        y=df_top['Filial'].str[:22], x=df_top['Pendente'],
+        orientation='h', name='Pendente', marker_color=cores['alerta'],
+        text=[formatar_moeda(v) for v in df_top['Pendente']],
+        textposition='inside', textfont=dict(size=8, color='white')
+    ))
+    fig.update_layout(
+        criar_layout(320),
+        barmode='stack',
+        margin=dict(l=10, r=10, t=10, b=10),
+        xaxis=dict(showticklabels=False, showgrid=False),
+        yaxis=dict(tickfont=dict(size=9, color=cores['texto'])),
+        legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='right', x=1, font=dict(size=9))
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
+
+def _render_prazos(df_bx, cores):
+    """Secao 6 - Prazos de Compensacao (distribuicao + evolucao mensal)"""
+    st.markdown("##### Prazos de Compensacao")
+
+    if len(df_bx) == 0 or 'DIF_DIAS_EMIS_BAIXA' not in df_bx.columns:
+        st.info("Sem dados de compensacao.")
+        return
 
     col1, col2 = st.columns(2)
 
     with col1:
+        st.markdown("###### Distribuicao por Faixa de Prazo")
+
+        df_temp = df_bx.copy()
+        df_temp['PRAZO'] = pd.to_numeric(df_temp['DIF_DIAS_EMIS_BAIXA'], errors='coerce')
+
+        def faixa_prazo(d):
+            if pd.isna(d) or d < 0:
+                return 'N/A'
+            d = int(d)
+            if d <= 15:
+                return 'Ate 15d'
+            elif d <= 30:
+                return '16-30d'
+            elif d <= 60:
+                return '31-60d'
+            elif d <= 90:
+                return '61-90d'
+            elif d <= 180:
+                return '91-180d'
+            return '180+d'
+
+        df_temp['FAIXA'] = df_temp['PRAZO'].apply(faixa_prazo)
+        ordem = ['Ate 15d', '16-30d', '31-60d', '61-90d', '91-180d', '180+d']
+
+        df_faixa = df_temp.groupby('FAIXA').agg({
+            'VALOR_BAIXA': 'sum' if 'VALOR_BAIXA' in df_temp.columns else 'count',
+            'PRAZO': 'count'
+        }).reindex(ordem, fill_value=0).reset_index()
+        df_faixa.columns = ['Faixa', 'Valor', 'Qtd']
+
+        cores_faixas = [cores['sucesso'], cores['info'], '#22d3ee', cores['alerta'], '#f97316', cores['perigo']]
+
         fig = go.Figure()
-
         fig.add_trace(go.Bar(
-            x=df_fil['Filial'].str[:20],
-            y=df_fil['Compensado'],
-            name='Compensado',
-            marker_color=cores['sucesso']
+            x=df_faixa['Faixa'], y=df_faixa['Valor'],
+            marker_color=cores_faixas,
+            text=[f"{formatar_moeda(v)}<br>({int(q)})" for v, q in zip(df_faixa['Valor'], df_faixa['Qtd'])],
+            textposition='outside', textfont=dict(size=9, color=cores['texto'])
         ))
-
-        fig.add_trace(go.Bar(
-            x=df_fil['Filial'].str[:20],
-            y=df_fil['Pendente'],
-            name='Pendente',
-            marker_color=cores['alerta']
-        ))
-
         fig.update_layout(
-            criar_layout(280, barmode='stack'),
-            xaxis_tickangle=-45,
-            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1, font=dict(size=9)),
-            margin=dict(l=10, r=10, t=40, b=80)
+            criar_layout(280),
+            margin=dict(l=10, r=10, t=10, b=10),
+            xaxis=dict(tickfont=dict(size=10, color=cores['texto'])),
+            yaxis=dict(showticklabels=False, showgrid=False)
         )
-
         st.plotly_chart(fig, use_container_width=True)
 
     with col2:
-        # Taxa de compensacao por filial/grupo
-        df_fil_ord = df_fil.sort_values('Taxa', ascending=True)
+        st.markdown("###### Evolucao do Prazo Medio")
 
-        cores_barra = [cores['sucesso'] if t >= 70 else cores['alerta'] if t >= 50 else cores['perigo'] for t in df_fil_ord['Taxa']]
+        if 'DT_BAIXA' in df_bx.columns:
+            df_evol = df_bx.copy()
+            df_evol['MES'] = df_evol['DT_BAIXA'].dt.to_period('M').astype(str)
+            df_evol['PRAZO'] = pd.to_numeric(df_evol['DIF_DIAS_EMIS_BAIXA'], errors='coerce')
 
-        fig = go.Figure(go.Bar(
-            y=df_fil_ord['Filial'].str[:20],
-            x=df_fil_ord['Taxa'],
-            orientation='h',
-            marker_color=cores_barra,
-            text=[f"{t:.0f}%" for t in df_fil_ord['Taxa']],
-            textposition='outside',
-            textfont=dict(size=9)
-        ))
+            df_prazo_mes = df_evol.groupby('MES')['PRAZO'].mean().tail(12).reset_index()
+            df_prazo_mes.columns = ['MES', 'Prazo']
 
-        fig.add_vline(x=70, line_dash="dash", line_color=cores['texto_secundario'],
-                      annotation_text="Meta 70%", annotation_position="top")
+            if len(df_prazo_mes) > 1:
+                fig = go.Figure()
+                fig.add_trace(go.Scatter(
+                    x=df_prazo_mes['MES'], y=df_prazo_mes['Prazo'],
+                    mode='lines+markers',
+                    line=dict(color=cores['primaria'], width=2),
+                    marker=dict(size=8),
+                    text=[f"{int(p)}d" for p in df_prazo_mes['Prazo']],
+                    textposition='top center', textfont=dict(size=9, color=cores['texto'])
+                ))
+                fig.add_hline(y=60, line_dash="dash", line_color=cores['alerta'], line_width=1)
+                fig.update_layout(
+                    criar_layout(280),
+                    margin=dict(l=10, r=10, t=30, b=50),
+                    xaxis=dict(tickangle=-45, tickfont=dict(size=9, color=cores['texto'])),
+                    yaxis=dict(title='Dias', tickfont=dict(size=9, color=cores['texto']))
+                )
+                st.plotly_chart(fig, use_container_width=True)
+            else:
+                st.info("Historico insuficiente")
+        else:
+            st.info("Sem dados de data de baixa")
 
-        fig.update_layout(
-            criar_layout(280),
-            xaxis=dict(title='% Compensado', range=[0, 110]),
-            margin=dict(l=10, r=10, t=10, b=10)
-        )
 
-        st.plotly_chart(fig, use_container_width=True)
+def _render_consulta_cliente(df_ad, df_bx, col_cliente, cores):
+    """Secao 7 - Consulta por Cliente (drill-down)"""
+    st.markdown("##### Consulta por Cliente")
 
+    if col_cliente is None or col_cliente not in df_ad.columns:
+        return
 
-def _render_historico_cliente(df_ad, df_bx, col_cliente, cores):
-    """Historico detalhado de um cliente"""
-
-    st.markdown(f"""
-    <div style="background: {cores['card']}; border-left: 4px solid {cores['info']};
-                padding: 0.75rem 1rem; border-radius: 0 8px 8px 0; margin-bottom: 1rem;">
-        <h4 style="color: {cores['texto']}; margin: 0;">Historico do Cliente</h4>
-        <p style="color: {cores['texto_secundario']}; font-size: 0.8rem; margin: 0;">
-            Detalhamento de adiantamentos e compensacoes por cliente
-        </p>
-    </div>
-    """, unsafe_allow_html=True)
-
-    # Lista de clientes ordenados por saldo
-    df_cli = df_ad.groupby(col_cliente)['SALDO'].sum().nlargest(30).reset_index()
-    clientes = df_cli[col_cliente].tolist()
-
+    clientes = sorted(df_ad[col_cliente].dropna().unique().tolist())
     cliente_sel = st.selectbox(
-        "Selecione um cliente:",
-        options=[""] + clientes,
-        key="hist_cli_adiant",
-        format_func=lambda x: x[:40] if x else "Selecione..."
+        "Selecione um cliente",
+        options=['Selecione...'] + clientes,
+        key="adto_rec_cli_drill"
     )
 
-    if not cliente_sel:
+    if cliente_sel == 'Selecione...':
         return
 
-    df_cliente = df_ad[df_ad[col_cliente] == cliente_sel].copy()
+    df_sel = df_ad[df_ad[col_cliente] == cliente_sel]
+    df_bx_sel = df_bx[df_bx[col_cliente] == cliente_sel] if len(df_bx) > 0 and col_cliente in df_bx.columns else pd.DataFrame()
 
-    if len(df_cliente) == 0:
-        st.info("Sem dados para este cliente")
-        return
+    total_cli = df_sel['VALOR_ORIGINAL'].sum()
+    saldo_cli = df_sel['SALDO'].sum() if 'SALDO' in df_sel.columns else 0
+    pct_comp = ((total_cli - saldo_cli) / total_cli * 100) if total_cli > 0 else 0
 
-    # Metricas do cliente
-    total_adiantado = df_cliente['VALOR_ORIGINAL'].sum()
-    total_pendente = df_cliente['SALDO'].sum()
-    total_compensado = total_adiantado - total_pendente
-    taxa = total_compensado / total_adiantado * 100 if total_adiantado > 0 else 0
+    prazo_cli = 0
+    if len(df_bx_sel) > 0 and 'DIF_DIAS_EMIS_BAIXA' in df_bx_sel.columns:
+        prazo_cli = pd.to_numeric(df_bx_sel['DIF_DIAS_EMIS_BAIXA'], errors='coerce').mean()
 
-    qtd_total = len(df_cliente)
-    qtd_pendente = len(df_cliente[df_cliente['SALDO'] > 0])
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("Total Adiantado", formatar_moeda(total_cli), f"{len(df_sel)} titulos")
+    col2.metric("Saldo Pendente", formatar_moeda(saldo_cli))
+    col3.metric("% Compensado", f"{pct_comp:.1f}%")
+    col4.metric("Prazo Medio", f"{prazo_cli:.0f}d" if prazo_cli > 0 else "-")
 
-    col1, col2, col3, col4, col5 = st.columns(5)
-
-    col1.metric("Total Adiantado", formatar_moeda(total_adiantado), f"{qtd_total} registros")
-    col2.metric("Compensado", formatar_moeda(total_compensado))
-    col3.metric("Pendente", formatar_moeda(total_pendente), f"{qtd_pendente} abertos")
-    col4.metric("Taxa Compensacao", f"{taxa:.0f}%")
-
-    # Classificar cliente
-    if taxa >= 80:
-        rating = "A"
-        cor_rating = cores['sucesso']
-    elif taxa >= 60:
-        rating = "B"
-        cor_rating = cores['info']
-    elif taxa >= 40:
-        rating = "C"
-        cor_rating = '#fbbf24'
-    elif taxa >= 20:
-        rating = "D"
-        cor_rating = cores['alerta']
-    else:
-        rating = "E"
-        cor_rating = cores['perigo']
-
-    with col5:
-        st.markdown(f"""
-        <div style="text-align: center; background: {cores['card']}; border: 2px solid {cor_rating};
-                    border-radius: 8px; padding: 0.5rem;">
-            <span style="color: {cor_rating}; font-size: 2rem; font-weight: 800;">{rating}</span>
-            <p style="color: {cores['texto_secundario']}; font-size: 0.7rem; margin: 0;">Rating</p>
-        </div>
-        """, unsafe_allow_html=True)
-
-    # Evolucao mensal
-    if 'EMISSAO' in df_cliente.columns:
-        st.markdown("##### Evolucao Mensal")
-
-        df_cliente['MES'] = df_cliente['EMISSAO'].dt.to_period('M').astype(str)
-
-        df_mes = df_cliente.groupby('MES').agg({
-            'VALOR_ORIGINAL': 'sum',
-            'SALDO': 'sum'
-        }).reset_index()
-        df_mes['Compensado'] = df_mes['VALOR_ORIGINAL'] - df_mes['SALDO']
-
-        if len(df_mes) > 1:
-            fig = go.Figure()
-
-            fig.add_trace(go.Bar(
-                x=df_mes['MES'],
-                y=df_mes['Compensado'],
-                name='Compensado',
-                marker_color=cores['sucesso']
-            ))
-
-            fig.add_trace(go.Bar(
-                x=df_mes['MES'],
-                y=df_mes['SALDO'],
-                name='Pendente',
-                marker_color=cores['alerta']
-            ))
-
-            fig.update_layout(
-                criar_layout(200, barmode='stack'),
-                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1, font=dict(size=8)),
-                margin=dict(l=10, r=10, t=30, b=50),
-                xaxis_tickangle=-45
-            )
-
-            st.plotly_chart(fig, use_container_width=True)
-
-    # Lista de adiantamentos do cliente
-    st.markdown("##### Adiantamentos do Cliente")
-
+    # Tabela de titulos
     colunas = ['NOME_FILIAL', 'NUMERO', 'EMISSAO', 'VALOR_ORIGINAL', 'SALDO']
-    colunas_disp = [c for c in colunas if c in df_cliente.columns]
+    colunas_disp = [c for c in colunas if c in df_sel.columns]
+    df_tab = df_sel[colunas_disp].sort_values('EMISSAO', ascending=False).head(30).copy()
 
-    df_tabela = df_cliente[colunas_disp].sort_values('EMISSAO', ascending=False).copy()
-
-    if 'EMISSAO' in df_tabela.columns:
-        df_tabela['EMISSAO'] = df_tabela['EMISSAO'].dt.strftime('%d/%m/%Y')
-    df_tabela['VALOR_ORIGINAL'] = df_tabela['VALOR_ORIGINAL'].apply(lambda x: formatar_moeda(x, completo=True))
-    df_tabela['SALDO'] = df_tabela['SALDO'].apply(lambda x: formatar_moeda(x, completo=True))
+    if 'EMISSAO' in df_tab.columns:
+        df_tab['EMISSAO'] = pd.to_datetime(df_tab['EMISSAO'], errors='coerce').dt.strftime('%d/%m/%Y')
+    if 'VALOR_ORIGINAL' in df_tab.columns:
+        df_tab['VALOR_ORIGINAL'] = df_tab['VALOR_ORIGINAL'].apply(lambda x: formatar_moeda(x, completo=True))
+    if 'SALDO' in df_tab.columns:
+        df_tab['SALDO'] = df_tab['SALDO'].apply(lambda x: formatar_moeda(x, completo=True))
 
     nomes = {
         'NOME_FILIAL': 'Filial',
         'NUMERO': 'NF/Doc',
-        'EMISSAO': 'Data',
+        'EMISSAO': 'Emissao',
         'VALOR_ORIGINAL': 'Valor',
         'SALDO': 'Saldo'
     }
-    df_tabela.columns = [nomes.get(c, c) for c in df_tabela.columns]
+    df_tab.columns = [nomes.get(c, c) for c in df_tab.columns]
 
-    st.dataframe(df_tabela, use_container_width=True, hide_index=True, height=250)
+    st.dataframe(df_tab, use_container_width=True, hide_index=True, height=250)
+
+
+def _render_tabela_ranking(df_ad, df_bx, col_cliente, cores):
+    """Secao 8 - Tabela Ranking de Clientes"""
+    st.markdown("##### Ranking de Clientes")
+
+    if col_cliente is None or col_cliente not in df_ad.columns:
+        return
+
+    df_cli = df_ad.groupby(col_cliente).agg({
+        'VALOR_ORIGINAL': 'sum',
+        'SALDO': 'sum',
+        'EMISSAO': 'count'
+    }).reset_index()
+    df_cli.columns = ['Cliente', 'Total', 'Pendente', 'Qtd']
+    df_cli['Compensado'] = df_cli['Total'] - df_cli['Pendente']
+    df_cli['Pct_Comp'] = (df_cli['Compensado'] / df_cli['Total'] * 100).fillna(0).round(1)
+
+    # Prazo medio
+    if len(df_bx) > 0 and col_cliente in df_bx.columns and 'DIF_DIAS_EMIS_BAIXA' in df_bx.columns:
+        prazo_cli = df_bx.groupby(col_cliente)['DIF_DIAS_EMIS_BAIXA'].apply(
+            lambda x: pd.to_numeric(x, errors='coerce').mean()
+        )
+        df_cli['Prazo_Medio'] = df_cli['Cliente'].map(prazo_cli).fillna(0)
+    else:
+        df_cli['Prazo_Medio'] = 0
+
+    # Filtros
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        ordenar = st.selectbox(
+            "Ordenar por",
+            ["Maior Pendente", "Maior Total", "Menor % Compensado", "Maior Prazo"],
+            key="adto_rec_rank_ordem"
+        )
+    with col2:
+        filtro = st.selectbox(
+            "Filtrar",
+            ["Todos", "Com Pendencia", "Quitados"],
+            key="adto_rec_rank_filtro"
+        )
+    with col3:
+        busca = st.text_input("Buscar cliente", key="adto_rec_rank_busca")
+
+    df_exibir = df_cli.copy()
+
+    if filtro == "Com Pendencia":
+        df_exibir = df_exibir[df_exibir['Pendente'] > 0]
+    elif filtro == "Quitados":
+        df_exibir = df_exibir[df_exibir['Pendente'] <= 0]
+
+    if busca:
+        df_exibir = df_exibir[df_exibir['Cliente'].str.upper().str.contains(busca.upper(), na=False)]
+
+    sort_map = {
+        "Maior Pendente": ('Pendente', False),
+        "Maior Total": ('Total', False),
+        "Menor % Compensado": ('Pct_Comp', True),
+        "Maior Prazo": ('Prazo_Medio', False),
+    }
+    col_sort, asc = sort_map[ordenar]
+    df_exibir = df_exibir.sort_values(col_sort, ascending=asc).head(100)
+
+    # Formatar
+    df_show = df_exibir.copy()
+    df_show['Total'] = df_show['Total'].apply(lambda x: formatar_moeda(x, completo=True))
+    df_show['Compensado'] = df_show['Compensado'].apply(lambda x: formatar_moeda(x, completo=True))
+    df_show['Pendente'] = df_show['Pendente'].apply(lambda x: formatar_moeda(x, completo=True))
+    df_show['Prazo_Medio'] = df_show['Prazo_Medio'].apply(lambda x: f"{int(x)}d" if x > 0 else '-')
+    df_show = df_show[['Cliente', 'Total', 'Compensado', 'Pendente', 'Qtd', 'Pct_Comp', 'Prazo_Medio']]
+    df_show.columns = ['Cliente', 'Total', 'Compensado', 'Pendente', 'Qtd', '% Comp', 'Prazo Medio']
+
+    st.dataframe(
+        df_show,
+        use_container_width=True,
+        hide_index=True,
+        height=400,
+        column_config={
+            '% Comp': st.column_config.ProgressColumn(
+                '% Comp', format='%.0f%%', min_value=0, max_value=100
+            )
+        }
+    )
+    st.caption(f"Exibindo {len(df_show)} de {len(df_cli)} clientes")

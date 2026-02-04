@@ -8,6 +8,27 @@ from datetime import datetime
 from config.settings import CACHE_TTL, INTERCOMPANY_PADRONIZACAO, INTERCOMPANY_PATTERNS, GRUPOS_FILIAIS, get_grupo_filial
 
 
+def normalizar_nome_empresa(serie):
+    """Normaliza nomes de empresas para evitar duplicatas por variacao de grafia.
+    Trata: case, sufixos juridicos (S/A, S.A., LTDA.), pontuacao e espacos."""
+    import re
+    def _normalizar(nome):
+        if pd.isna(nome) or str(nome).strip() == '':
+            return nome
+        n = str(nome).strip().upper()
+        # Sufixos juridicos: S/A, S.A., S.A -> S A
+        n = re.sub(r'\bS\s*/\s*A\b', 'S A', n)
+        n = re.sub(r'\bS\.A\.?', 'S A', n)
+        # LTDA. -> LTDA
+        n = re.sub(r'\bLTDA\.', 'LTDA', n)
+        # Remover hifen e ponto no final do nome
+        n = re.sub(r'[\-\.]+\s*$', '', n)
+        # Colapsar espacos multiplos
+        n = re.sub(r'\s+', ' ', n).strip()
+        return n
+    return serie.apply(_normalizar)
+
+
 def padronizar_nome_intercompany(nome):
     """Padroniza nomes de empresas do grupo para comparação correta"""
     if pd.isna(nome):
@@ -44,15 +65,15 @@ def carregar_dados_receber():
     df_contas.columns = [str(c).upper() for c in df_contas.columns]
     df_baixas.columns = [str(c).upper() for c in df_baixas.columns]
 
-    # Garantir que colunas de nome sejam string (evita erro de tipos mistos no Arrow)
+    # Normalizar nomes de clientes/fornecedores (case, sufixos juridicos, espacos, pontuacao)
     if 'NOME_CLIENTE' in df_contas.columns:
-        df_contas['NOME_CLIENTE'] = df_contas['NOME_CLIENTE'].astype(str)
+        df_contas['NOME_CLIENTE'] = normalizar_nome_empresa(df_contas['NOME_CLIENTE'].astype(str))
     if 'NOME_CLIENTE' in df_baixas.columns:
-        df_baixas['NOME_CLIENTE'] = df_baixas['NOME_CLIENTE'].astype(str)
+        df_baixas['NOME_CLIENTE'] = normalizar_nome_empresa(df_baixas['NOME_CLIENTE'].astype(str))
     if 'NOME_FORNECEDOR' in df_contas.columns:
-        df_contas['NOME_FORNECEDOR'] = df_contas['NOME_FORNECEDOR'].astype(str)
+        df_contas['NOME_FORNECEDOR'] = normalizar_nome_empresa(df_contas['NOME_FORNECEDOR'].astype(str))
     if 'NOME_FORNECEDOR' in df_baixas.columns:
-        df_baixas['NOME_FORNECEDOR'] = df_baixas['NOME_FORNECEDOR'].astype(str)
+        df_baixas['NOME_FORNECEDOR'] = normalizar_nome_empresa(df_baixas['NOME_FORNECEDOR'].astype(str))
 
     # Limpar espaços da coluna TIPO (vem com espaços do Excel)
     if 'TIPO' in df_contas.columns:

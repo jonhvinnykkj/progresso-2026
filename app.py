@@ -19,6 +19,7 @@ if not verificar_autenticacao():
 
 # Imports apos configuracao
 from datetime import datetime
+import pandas as pd
 
 from config.theme import get_cores, get_css
 from data.loader import carregar_dados, aplicar_filtros, get_opcoes_filtros, get_dados_filtrados, calcular_metricas
@@ -195,6 +196,16 @@ def main():
                 df_adiant_filtrado = df_adiant_filtrado[df_adiant_filtrado['FILIAL'].isin(filtro_filiais)]
             if 'FILIAL' in df_baixas_filtrado.columns:
                 df_baixas_filtrado = df_baixas_filtrado[df_baixas_filtrado['FILIAL'].isin(filtro_filiais)]
+        # Aplicar filtro de data (mesmo criterio das outras abas)
+        if 'EMISSAO' in df_adiant_filtrado.columns:
+            df_adiant_filtrado = df_adiant_filtrado[
+                (pd.to_datetime(df_adiant_filtrado['EMISSAO'], errors='coerce').dt.date >= data_inicio) &
+                (pd.to_datetime(df_adiant_filtrado['EMISSAO'], errors='coerce').dt.date <= data_fim)
+            ]
+        if 'DT_BAIXA' in df_baixas_filtrado.columns:
+            df_baixas_filtrado = df_baixas_filtrado[
+                pd.to_datetime(df_baixas_filtrado['DT_BAIXA'], errors='coerce').dt.date <= data_fim
+            ]
         render_adiantamentos(df_adiant_filtrado, df_baixas_filtrado)
 
     with tab10:
