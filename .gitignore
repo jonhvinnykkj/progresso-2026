@@ -8,12 +8,8 @@ venv/
 env/
 .env
 
-# Data
-*.xlsx
+# Data (arquivos Excel do data/ sao versionados para deploy)
 *.csv
-*.xls
-data/*.xlsx
-data/*.csv
 
 # IDE
 .idea/
