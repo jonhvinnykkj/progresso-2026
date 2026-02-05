@@ -10,28 +10,40 @@ from datetime import datetime, timedelta
 from config.theme import get_cores
 from components.charts import criar_layout
 from utils.formatters import formatar_moeda, formatar_numero
-from utils.data_helpers import get_df_pendentes, get_df_vencidos
 from config.settings import GRUPOS_FILIAIS, get_grupo_filial
 
 
 def render_categorias(df):
-    """Renderiza a aba de Categorias"""
+    """Renderiza a aba de Categorias - apenas titulos PAGOS"""
     cores = get_cores()
 
     if len(df) == 0:
         st.warning("Nenhum dado disponivel.")
         return
 
-    # Calcular dataframes
-    df_pendentes = get_df_pendentes(df)
-    df_vencidos = get_df_vencidos(df)
+    # Filtrar apenas titulos PAGOS (SALDO == 0)
     df_pagos = df[df['SALDO'] == 0].copy()
 
-    # Dados agregados por categoria
-    df_cat = _preparar_dados_categoria(df, df_pagos)
+    if len(df_pagos) == 0:
+        st.warning("Nenhum titulo pago no periodo selecionado.")
+        return
+
+    # Card informativo
+    st.markdown(f"""
+    <div style="background: {cores['info']}15; border: 1px solid {cores['info']}50;
+                border-radius: 8px; padding: 0.75rem 1rem; margin-bottom: 1rem;">
+        <p style="color: {cores['info']}; font-size: 0.9rem; font-weight: 600; margin: 0;">
+            Esta analise considera apenas titulos PAGOS (baixados)</p>
+        <p style="color: {cores['texto_secundario']}; font-size: 0.8rem; margin: 0.25rem 0 0 0;">
+            {formatar_numero(len(df_pagos))} titulos pagos | {formatar_moeda(df_pagos['VALOR_ORIGINAL'].sum())} em valor total</p>
+    </div>
+    """, unsafe_allow_html=True)
+
+    # Dados agregados por categoria (usando df_pagos)
+    df_cat = _preparar_dados_categoria(df_pagos)
 
     # ========== KPIs ==========
-    _render_kpis(df_cat, df, df_pagos, df_vencidos, cores)
+    _render_kpis(df_cat, df_pagos, cores)
 
     st.divider()
 
@@ -47,7 +59,7 @@ def render_categorias(df):
     st.divider()
 
     # ========== EVOLUCAO MENSAL ==========
-    _render_evolucao_mensal(df, cores)
+    _render_evolucao_mensal(df_pagos, cores)
 
     st.divider()
 
@@ -62,12 +74,12 @@ def render_categorias(df):
     st.divider()
 
     # ========== SAZONALIDADE ==========
-    _render_sazonalidade(df, cores)
+    _render_sazonalidade(df_pagos, cores)
 
     st.divider()
 
     # ========== MATRIZ FILIAL x CATEGORIA ==========
-    _render_matriz_filial_categoria(df, cores)
+    _render_matriz_filial_categoria(df_pagos, cores)
 
     st.divider()
 
@@ -76,13 +88,8 @@ def render_categorias(df):
 
     st.divider()
 
-    # ========== VENCIDOS POR CATEGORIA ==========
-    _render_vencidos_por_categoria(df_vencidos, cores)
-
-    st.divider()
-
     # ========== BUSCA CATEGORIA ==========
-    _render_busca_categoria(df, df_pagos, df_vencidos, cores)
+    _render_busca_categoria(df_pagos, cores)
 
     st.divider()
 
@@ -195,31 +202,28 @@ def _render_alertas(df, df_cat, df_pagos, cores):
             """, unsafe_allow_html=True)
 
 
-def _preparar_dados_categoria(df, df_pagos):
-    """Prepara dados agregados por categoria"""
+def _preparar_dados_categoria(df_pagos):
+    """Prepara dados agregados por categoria (apenas pagos)"""
 
-    df_cat = df.groupby('DESCRICAO').agg({
+    df_cat = df_pagos.groupby('DESCRICAO').agg({
         'VALOR_ORIGINAL': 'sum',
-        'SALDO': 'sum',
         'FORNECEDOR': 'count',
         'NOME_FORNECEDOR': 'nunique',
         'NOME_FILIAL': 'nunique'
     }).reset_index()
 
-    df_cat.columns = ['Categoria', 'Total', 'Pendente', 'Qtd', 'Fornecedores', 'Filiais']
-    df_cat['Pago'] = df_cat['Total'] - df_cat['Pendente']
-    df_cat['Pct_Pago'] = (df_cat['Pago'] / df_cat['Total'] * 100).fillna(0).round(1)
+    df_cat.columns = ['Categoria', 'Total', 'Qtd', 'Fornecedores', 'Filiais']
     df_cat = df_cat.sort_values('Total', ascending=False)
 
     return df_cat
 
 
-def _render_kpis(df_cat, df, df_pagos, df_vencidos, cores):
-    """KPIs principais"""
+def _render_kpis(df_cat, df_pagos, cores):
+    """KPIs principais (apenas pagos)"""
 
     total_categorias = len(df_cat)
     total_valor = df_cat['Total'].sum()
-    total_vencido = df_vencidos['SALDO'].sum() if len(df_vencidos) > 0 else 0
+    total_titulos = df_cat['Qtd'].sum()
 
     # Taxa pontualidade geral
     taxa_pontual = 0
@@ -235,25 +239,23 @@ def _render_kpis(df_cat, df, df_pagos, df_vencidos, cores):
         if len(prazo) > 0:
             prazo_medio = prazo.mean()
 
-    # Categorias com vencido
-    cat_com_vencido = df_vencidos['DESCRICAO'].nunique() if len(df_vencidos) > 0 else 0
+    # Fornecedores unicos
+    total_fornecedores = df_pagos['NOME_FORNECEDOR'].nunique() if 'NOME_FORNECEDOR' in df_pagos.columns else 0
 
     col1, col2, col3, col4, col5 = st.columns(5)
 
     with col1:
         st.metric(
-            label="Total Categorias",
+            label="Categorias",
             value=formatar_numero(total_categorias),
-            delta=f"{formatar_numero(df_cat['Qtd'].sum())} titulos",
+            delta=f"{formatar_numero(total_titulos)} titulos pagos",
             delta_color="off"
         )
 
     with col2:
         st.metric(
-            label="Valor Total",
-            value=formatar_moeda(total_valor),
-            delta=f"Vencido: {formatar_moeda(total_vencido)}",
-            delta_color="off"
+            label="Valor Pago",
+            value=formatar_moeda(total_valor)
         )
 
     with col3:
@@ -273,17 +275,14 @@ def _render_kpis(df_cat, df, df_pagos, df_vencidos, cores):
         )
 
     with col5:
-        pct = (cat_com_vencido / total_categorias * 100) if total_categorias > 0 else 0
         st.metric(
-            label="Cat. com Vencido",
-            value=formatar_numero(cat_com_vencido),
-            delta=f"{pct:.0f}% do total",
-            delta_color="off"
+            label="Fornecedores",
+            value=formatar_numero(total_fornecedores)
         )
 
 
 def _render_treemap(df_cat, cores):
-    """Treemap de categorias"""
+    """Treemap de categorias (valores pagos)"""
 
     st.markdown("##### Treemap - Distribuicao")
 
@@ -297,14 +296,14 @@ def _render_treemap(df_cat, cores):
         df_tree,
         path=['Categoria'],
         values='Total',
-        color='Pct_Pago',
-        color_continuous_scale='RdYlGn',
-        hover_data={'Total': ':,.2f', 'Pendente': ':,.2f', 'Pct_Pago': ':.1f'}
+        color='Total',
+        color_continuous_scale='Greens',
+        hover_data={'Total': ':,.2f', 'Qtd': True, 'Fornecedores': True}
     )
 
     fig.update_layout(
         criar_layout(300),
-        coloraxis_colorbar=dict(title="% Pago", len=0.6),
+        coloraxis_showscale=False,
         margin=dict(l=10, r=10, t=10, b=10)
     )
 
@@ -380,7 +379,7 @@ def _render_evolucao_mensal(df, cores):
 
 
 def _render_pareto_abc(df_cat, cores):
-    """Analise Pareto / Curva ABC de categorias"""
+    """Analise Pareto / Curva ABC de categorias (valores pagos)"""
 
     st.markdown("##### Analise ABC - Concentracao de Gastos")
 
@@ -388,7 +387,7 @@ def _render_pareto_abc(df_cat, cores):
         st.info("Sem dados")
         return
 
-    df_pareto = df_cat[['Categoria', 'Total', 'Pendente', 'Qtd', 'Fornecedores']].copy()
+    df_pareto = df_cat[['Categoria', 'Total', 'Qtd', 'Fornecedores']].copy()
     df_pareto = df_pareto.sort_values('Total', ascending=False).reset_index(drop=True)
 
     total_geral = df_pareto['Total'].sum()
@@ -767,106 +766,45 @@ def _render_prazo_por_categoria(df_pagos, cores):
 
 
 def _render_top_categorias(df_cat, cores):
-    """Top 10 categorias - Pago e Pendente em graficos separados"""
+    """Top 10 categorias - Valor Pago"""
 
-    df_top = df_cat.head(10)
+    st.markdown("##### Top 10 Categorias - Valor Pago")
+
+    df_top = df_cat.head(10).copy()
+    df_top = df_top.sort_values('Total', ascending=True)
 
     if len(df_top) == 0:
         st.info("Sem dados")
         return
 
-    col1, col2 = st.columns(2)
-
-    with col1:
-        st.markdown("##### Top 10 - Pago")
-        fig = go.Figure(go.Bar(
-            y=df_top['Categoria'].str[:25],
-            x=df_top['Pago'],
-            orientation='h',
-            marker_color=cores['sucesso'],
-            text=[formatar_moeda(v) for v in df_top['Pago']],
-            textposition='outside',
-            textfont=dict(size=9)
-        ))
-        fig.update_layout(
-            criar_layout(300),
-            yaxis={'autorange': 'reversed'},
-            xaxis=dict(showticklabels=False, showgrid=False),
-            margin=dict(l=10, r=10, t=10, b=10)
-        )
-        st.plotly_chart(fig, use_container_width=True)
-
-    with col2:
-        st.markdown("##### Top 10 - Pendente")
-        fig = go.Figure(go.Bar(
-            y=df_top['Categoria'].str[:25],
-            x=df_top['Pendente'],
-            orientation='h',
-            marker_color=cores['alerta'],
-            text=[formatar_moeda(v) for v in df_top['Pendente']],
-            textposition='outside',
-            textfont=dict(size=9)
-        ))
-        fig.update_layout(
-            criar_layout(300),
-            yaxis={'autorange': 'reversed'},
-            xaxis=dict(showticklabels=False, showgrid=False),
-            margin=dict(l=10, r=10, t=10, b=10)
-        )
-        st.plotly_chart(fig, use_container_width=True)
-
-
-def _render_vencidos_por_categoria(df_vencidos, cores):
-    """Vencidos por categoria"""
-
-    st.markdown("##### Vencidos por Categoria")
-
-    if len(df_vencidos) == 0:
-        st.success("Nenhum titulo vencido!")
-        return
-
-    df_venc = df_vencidos.groupby('DESCRICAO').agg({
-        'SALDO': 'sum',
-        'DIAS_ATRASO': 'mean',
-        'VALOR_ORIGINAL': 'count'
-    }).nlargest(10, 'SALDO').reset_index()
-    df_venc.columns = ['Categoria', 'Valor', 'Atraso_Medio', 'Qtd']
-
-    def cor_atraso(d):
-        if d > 30:
-            return cores['perigo']
-        elif d > 15:
-            return '#f97316'
-        return cores['alerta']
-
-    bar_colors = [cor_atraso(d) for d in df_venc['Atraso_Medio']]
-
     fig = go.Figure(go.Bar(
-        y=df_venc['Categoria'].str[:25],
-        x=df_venc['Valor'],
+        y=df_top['Categoria'].str[:30],
+        x=df_top['Total'],
         orientation='h',
-        marker_color=bar_colors,
-        text=[f"{formatar_moeda(v)} ({d:.0f}d)" for v, d in zip(df_venc['Valor'], df_venc['Atraso_Medio'])],
+        marker_color=cores['sucesso'],
+        text=[f"{formatar_moeda(v)}  ({q} tit.)" for v, q in zip(df_top['Total'], df_top['Qtd'])],
         textposition='outside',
-        textfont=dict(size=9)
+        textfont=dict(size=9, color=cores['texto'])
     ))
 
     fig.update_layout(
-        criar_layout(300),
-        yaxis={'autorange': 'reversed'},
-        margin=dict(l=10, r=80, t=10, b=10)
+        criar_layout(350),
+        xaxis=dict(showticklabels=False, showgrid=False),
+        yaxis=dict(tickfont=dict(size=9, color=cores['texto'])),
+        margin=dict(l=10, r=120, t=10, b=10)
     )
 
     st.plotly_chart(fig, use_container_width=True)
-    st.caption("Cor indica atraso medio (amarelo < 15d, laranja < 30d, vermelho > 30d)")
 
 
-def _render_busca_categoria(df, df_pagos, df_vencidos, cores):
-    """Busca e detalhes de categoria"""
+
+
+def _render_busca_categoria(df_pagos, cores):
+    """Busca e detalhes de categoria (apenas pagos)"""
 
     st.markdown("##### Consultar Categoria")
 
-    categorias = sorted(df['DESCRICAO'].unique().tolist())
+    categorias = sorted(df_pagos['DESCRICAO'].unique().tolist())
 
     categoria_sel = st.selectbox(
         "Selecione uma categoria",
@@ -877,43 +815,32 @@ def _render_busca_categoria(df, df_pagos, df_vencidos, cores):
     if not categoria_sel:
         return
 
-    df_sel = df[df['DESCRICAO'] == categoria_sel]
-    df_pago_sel = df_pagos[df_pagos['DESCRICAO'] == categoria_sel]
-    df_venc_sel = df_vencidos[df_vencidos['DESCRICAO'] == categoria_sel]
+    df_sel = df_pagos[df_pagos['DESCRICAO'] == categoria_sel]
 
-    # Metricas financeiras
+    # Metricas
     total_valor = df_sel['VALOR_ORIGINAL'].sum()
-    total_pendente = df_sel['SALDO'].sum()
-    total_pago = total_valor - total_pendente
-    total_vencido = df_venc_sel['SALDO'].sum() if len(df_venc_sel) > 0 else 0
+    qtd_titulos = len(df_sel)
 
     # Metricas de pagamento
     prazo_medio = 0
     taxa_pontual = 0
-    if len(df_pago_sel) > 0:
-        if 'DIAS_PARA_PAGAR' in df_pago_sel.columns:
-            prazo = df_pago_sel['DIAS_PARA_PAGAR'].dropna()
+    if len(df_sel) > 0:
+        if 'DIAS_PARA_PAGAR' in df_sel.columns:
+            prazo = df_sel['DIAS_PARA_PAGAR'].dropna()
             if len(prazo) > 0:
                 prazo_medio = prazo.mean()
 
-        if 'DIAS_ATRASO_PGTO' in df_pago_sel.columns:
-            atraso = df_pago_sel['DIAS_ATRASO_PGTO'].dropna()
+        if 'DIAS_ATRASO_PGTO' in df_sel.columns:
+            atraso = df_sel['DIAS_ATRASO_PGTO'].dropna()
             if len(atraso) > 0:
                 taxa_pontual = (atraso <= 0).sum() / len(atraso) * 100
 
-    # Linha 1: Metricas financeiras
+    # Linha 1: Metricas
     col1, col2, col3, col4 = st.columns(4)
-    col1.metric("Valor Total", formatar_moeda(total_valor), f"{len(df_sel)} titulos")
-    col2.metric("Pago", formatar_moeda(total_pago))
-    col3.metric("Pendente", formatar_moeda(total_pendente))
-    col4.metric("Vencido", formatar_moeda(total_vencido))
-
-    # Linha 2: Metricas de comportamento
-    col1, col2, col3, col4 = st.columns(4)
-    col1.metric("Prazo Medio Pgto", f"{prazo_medio:.0f} dias")
-    col2.metric("Taxa Pontualidade", f"{taxa_pontual:.1f}%")
-    col3.metric("Fornecedores", df_sel['NOME_FORNECEDOR'].nunique())
-    col4.metric("Filiais", df_sel['NOME_FILIAL'].nunique())
+    col1.metric("Valor Pago", formatar_moeda(total_valor), f"{qtd_titulos} titulos")
+    col2.metric("Prazo Medio Pgto", f"{prazo_medio:.0f} dias")
+    col3.metric("Taxa Pontualidade", f"{taxa_pontual:.1f}%")
+    col4.metric("Fornecedores", df_sel['NOME_FORNECEDOR'].nunique())
 
     # Tabs
     tab1, tab2, tab3 = st.tabs(["Por Fornecedor", "Por Filial", "Titulos"])
@@ -921,29 +848,26 @@ def _render_busca_categoria(df, df_pagos, df_vencidos, cores):
     with tab1:
         df_forn = df_sel.groupby('NOME_FORNECEDOR').agg({
             'VALOR_ORIGINAL': 'sum',
-            'SALDO': 'sum'
+            'NUMERO': 'count'
         }).nlargest(10, 'VALOR_ORIGINAL').reset_index()
+        df_forn.columns = ['Fornecedor', 'Valor', 'Qtd']
+        df_forn = df_forn.sort_values('Valor', ascending=True)
 
         if len(df_forn) > 0:
-            fig = go.Figure()
-            fig.add_trace(go.Bar(
-                y=df_forn['NOME_FORNECEDOR'].str[:20],
-                x=df_forn['VALOR_ORIGINAL'] - df_forn['SALDO'],
+            fig = go.Figure(go.Bar(
+                y=df_forn['Fornecedor'].str[:25],
+                x=df_forn['Valor'],
                 orientation='h',
-                name='Pago',
-                marker_color=cores['sucesso']
-            ))
-            fig.add_trace(go.Bar(
-                y=df_forn['NOME_FORNECEDOR'].str[:20],
-                x=df_forn['SALDO'],
-                orientation='h',
-                name='Pendente',
-                marker_color=cores['alerta']
+                marker_color=cores['sucesso'],
+                text=[f"{formatar_moeda(v)} ({q})" for v, q in zip(df_forn['Valor'], df_forn['Qtd'])],
+                textposition='outside',
+                textfont=dict(size=9, color=cores['texto'])
             ))
             fig.update_layout(
-                criar_layout(250, barmode='stack'),
-                yaxis={'autorange': 'reversed'},
-                margin=dict(l=10, r=10, t=10, b=10)
+                criar_layout(250),
+                xaxis=dict(showticklabels=False, showgrid=False),
+                yaxis=dict(tickfont=dict(size=9, color=cores['texto'])),
+                margin=dict(l=10, r=100, t=10, b=10)
             )
             st.plotly_chart(fig, use_container_width=True)
 
@@ -952,24 +876,20 @@ def _render_busca_categoria(df, df_pagos, df_vencidos, cores):
         if multiplos_busca:
             df_fil = df_sel.copy()
             df_fil['GRUPO'] = df_fil['FILIAL'].apply(lambda x: _get_nome_grupo_cat(x))
-            df_fil = df_fil.groupby('GRUPO').agg({
-                'VALOR_ORIGINAL': 'sum',
-                'SALDO': 'sum'
-            }).reset_index()
+            df_fil = df_fil.groupby('GRUPO')['VALOR_ORIGINAL'].sum().reset_index()
             pie_labels = df_fil['GRUPO']
+            pie_values = df_fil['VALOR_ORIGINAL']
         else:
             df_fil = df_sel.copy()
             df_fil['FILIAL_LABEL'] = df_fil['FILIAL'].astype(int).astype(str) + ' - ' + df_fil['NOME_FILIAL'].str.split(' - ').str[-1].str.strip()
-            df_fil = df_fil.groupby('FILIAL_LABEL').agg({
-                'VALOR_ORIGINAL': 'sum',
-                'SALDO': 'sum'
-            }).reset_index()
+            df_fil = df_fil.groupby('FILIAL_LABEL')['VALOR_ORIGINAL'].sum().reset_index()
             pie_labels = df_fil['FILIAL_LABEL']
+            pie_values = df_fil['VALOR_ORIGINAL']
 
         if len(df_fil) > 0:
             fig = go.Figure(go.Pie(
                 labels=pie_labels,
-                values=df_fil['VALOR_ORIGINAL'],
+                values=pie_values,
                 hole=0.4,
                 textinfo='percent+label',
                 textfont=dict(size=10)
@@ -982,7 +902,7 @@ def _render_busca_categoria(df, df_pagos, df_vencidos, cores):
             st.plotly_chart(fig, use_container_width=True)
 
     with tab3:
-        colunas = ['NOME_FILIAL', 'NOME_FORNECEDOR', 'TIPO', 'NUMERO', 'EMISSAO', 'VENCIMENTO', 'DT_BAIXA', 'DIAS_PARA_PAGAR', 'VALOR_ORIGINAL', 'SALDO', 'STATUS']
+        colunas = ['NOME_FILIAL', 'NOME_FORNECEDOR', 'TIPO', 'NUMERO', 'EMISSAO', 'VENCIMENTO', 'DT_BAIXA', 'DIAS_PARA_PAGAR', 'VALOR_ORIGINAL']
         colunas_disp = [c for c in colunas if c in df_sel.columns]
         df_tab = df_sel[colunas_disp].nlargest(50, 'VALOR_ORIGINAL').copy()
 
@@ -992,7 +912,6 @@ def _render_busca_categoria(df, df_pagos, df_vencidos, cores):
                 df_tab[col] = df_tab[col].fillna('-')
 
         df_tab['VALOR_ORIGINAL'] = df_tab['VALOR_ORIGINAL'].apply(lambda x: formatar_moeda(x, completo=True))
-        df_tab['SALDO'] = df_tab['SALDO'].apply(lambda x: formatar_moeda(x, completo=True))
 
         if 'DIAS_PARA_PAGAR' in df_tab.columns:
             df_tab['DIAS_PARA_PAGAR'] = df_tab['DIAS_PARA_PAGAR'].apply(lambda x: f"{int(x)}d" if pd.notna(x) else '-')
@@ -1006,9 +925,7 @@ def _render_busca_categoria(df, df_pagos, df_vencidos, cores):
             'VENCIMENTO': 'Vencimento',
             'DT_BAIXA': 'Dt Pagto',
             'DIAS_PARA_PAGAR': 'Dias p/ Pagar',
-            'VALOR_ORIGINAL': 'Valor',
-            'SALDO': 'Pendente',
-            'STATUS': 'Status'
+            'VALOR_ORIGINAL': 'Valor'
         }
         df_tab.columns = [nomes.get(c, c) for c in df_tab.columns]
 
@@ -1016,22 +933,20 @@ def _render_busca_categoria(df, df_pagos, df_vencidos, cores):
 
 
 def _render_ranking(df_cat, df_pagos, cores):
-    """Ranking completo"""
+    """Ranking completo (apenas pagos)"""
 
     st.markdown("##### Ranking de Categorias")
 
     # Filtros
-    col1, col2, col3 = st.columns(3)
+    col1, col2 = st.columns(2)
     with col1:
         ordenar = st.selectbox(
             "Ordenar por",
-            ["Valor Total", "Saldo Pendente", "Prazo Medio", "Pontualidade"],
+            ["Valor Pago", "Prazo Medio", "Pontualidade", "Qtd Titulos"],
             key="cat_ordem"
         )
     with col2:
         qtd_exibir = st.selectbox("Exibir", [15, 30, 50], key="cat_qtd")
-    with col3:
-        filtro = st.selectbox("Filtrar", ["Todas", "Com Pendencia", "Quitadas"], key="cat_filtro")
 
     # Adicionar metricas de pagamento
     df_rank = df_cat.copy()
@@ -1063,45 +978,30 @@ def _render_ranking(df_cat, df_pagos, cores):
         df_rank['Prazo'] = None
         df_rank['Pontualidade'] = None
 
-    # Filtrar
-    if filtro == "Com Pendencia":
-        df_rank = df_rank[df_rank['Pendente'] > 0]
-    elif filtro == "Quitadas":
-        df_rank = df_rank[df_rank['Pendente'] <= 0]
-
     # Ordenar
-    if ordenar == "Valor Total":
+    if ordenar == "Valor Pago":
         df_rank = df_rank.sort_values('Total', ascending=False)
-    elif ordenar == "Saldo Pendente":
-        df_rank = df_rank.sort_values('Pendente', ascending=False)
     elif ordenar == "Prazo Medio":
         df_rank = df_rank.sort_values('Prazo', ascending=False, na_position='last')
+    elif ordenar == "Qtd Titulos":
+        df_rank = df_rank.sort_values('Qtd', ascending=False)
     else:
         df_rank = df_rank.sort_values('Pontualidade', ascending=True, na_position='last')
 
     df_rank = df_rank.head(qtd_exibir)
 
     # Formatar
-    df_show = df_rank[['Categoria', 'Total', 'Pendente', 'Qtd', 'Fornecedores', 'Prazo', 'Pontualidade', 'Pct_Pago']].copy()
+    df_show = df_rank[['Categoria', 'Total', 'Qtd', 'Fornecedores', 'Prazo', 'Pontualidade']].copy()
     df_show['Total'] = df_show['Total'].apply(lambda x: formatar_moeda(x, completo=True))
-    df_show['Pendente'] = df_show['Pendente'].apply(lambda x: formatar_moeda(x, completo=True))
     df_show['Prazo'] = df_show['Prazo'].apply(lambda x: f"{x:.0f}d" if pd.notna(x) else '-')
     df_show['Pontualidade'] = df_show['Pontualidade'].apply(lambda x: f"{x:.0f}%" if pd.notna(x) else '-')
-    df_show.columns = ['Categoria', 'Total', 'Pendente', 'Titulos', 'Fornecedores', 'Prazo', 'Pontualidade', '% Pago']
+    df_show.columns = ['Categoria', 'Valor Pago', 'Titulos', 'Fornecedores', 'Prazo Medio', 'Pontualidade']
 
     st.dataframe(
         df_show,
         use_container_width=True,
         hide_index=True,
-        height=400,
-        column_config={
-            "% Pago": st.column_config.ProgressColumn(
-                "% Pago",
-                format="%.1f%%",
-                min_value=0,
-                max_value=100
-            )
-        }
+        height=400
     )
 
     st.caption(f"Exibindo {len(df_show)} categorias")
