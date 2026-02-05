@@ -280,7 +280,22 @@ def _render_categorias_por_tipo(df, cores):
         return
 
     tipos_disp = df['TIPO'].value_counts().index.tolist()
-    tipo_sel = st.selectbox("Selecione o tipo de documento", tipos_disp, key='tipo_doc_rec_cat')
+
+    if len(tipos_disp) == 0:
+        st.info("Nenhum tipo de documento disponivel.")
+        return
+
+    # Verificar se o tipo selecionado anteriormente ainda existe
+    tipo_anterior = st.session_state.get('tipo_doc_rec_cat_valor', None)
+    if tipo_anterior and tipo_anterior in tipos_disp:
+        idx_default = tipos_disp.index(tipo_anterior)
+    else:
+        idx_default = 0
+
+    tipo_sel = st.selectbox("Selecione o tipo de documento", tipos_disp, index=idx_default, key='tipo_doc_rec_cat')
+
+    # Salvar seleção no session_state
+    st.session_state['tipo_doc_rec_cat_valor'] = tipo_sel
 
     df_tipo = df[df['TIPO'] == tipo_sel]
 
