@@ -136,27 +136,27 @@ def _render_resumo_geral(df_pendentes, df_vencidos, cores, hoje):
     dias_atraso_medio = 0
     if len(df_vencidos) > 0 and 'DIAS_ATRASO' in df_vencidos.columns:
         dias_atraso_medio = df_vencidos['DIAS_ATRASO'].mean()
-    fornecedores_vencido = df_vencidos['NOME_FORNECEDOR'].nunique() if len(df_vencidos) > 0 else 0
+    titulos_vencidos = len(df_vencidos)
 
     st.markdown(f"""
     <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.75rem; margin-bottom: 0.5rem;">
         <div style="background: {cores['card']}; border-left: 3px solid {cores['perigo']};
                     border-radius: 0 8px 8px 0; padding: 0.75rem;">
+            <p style="color: {cores['texto_secundario']}; font-size: 0.7rem; margin: 0;">TITULOS VENCIDOS</p>
+            <p style="color: {cores['texto']}; font-size: 1.1rem; font-weight: 700; margin: 0.15rem 0;">
+                {formatar_numero(titulos_vencidos)}</p>
+        </div>
+        <div style="background: {cores['card']}; border-left: 3px solid {cores['alerta']};
+                    border-radius: 0 8px 8px 0; padding: 0.75rem;">
             <p style="color: {cores['texto_secundario']}; font-size: 0.7rem; margin: 0;">TICKET MEDIO VENCIDO</p>
             <p style="color: {cores['texto']}; font-size: 1.1rem; font-weight: 700; margin: 0.15rem 0;">
                 {formatar_moeda(ticket_medio_vencido)}</p>
         </div>
-        <div style="background: {cores['card']}; border-left: 3px solid {cores['alerta']};
+        <div style="background: {cores['card']}; border-left: 3px solid {cores['info']};
                     border-radius: 0 8px 8px 0; padding: 0.75rem;">
             <p style="color: {cores['texto_secundario']}; font-size: 0.7rem; margin: 0;">ATRASO MEDIO</p>
             <p style="color: {cores['texto']}; font-size: 1.1rem; font-weight: 700; margin: 0.15rem 0;">
                 {dias_atraso_medio:.0f} dias</p>
-        </div>
-        <div style="background: {cores['card']}; border-left: 3px solid {cores['info']};
-                    border-radius: 0 8px 8px 0; padding: 0.75rem;">
-            <p style="color: {cores['texto_secundario']}; font-size: 0.7rem; margin: 0;">FORNECEDORES C/ VENCIDO</p>
-            <p style="color: {cores['texto']}; font-size: 1.1rem; font-weight: 700; margin: 0.15rem 0;">
-                {fornecedores_vencido}</p>
         </div>
     </div>
     """, unsafe_allow_html=True)
