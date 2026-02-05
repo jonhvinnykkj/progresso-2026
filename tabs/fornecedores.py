@@ -6,7 +6,7 @@ import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
 from datetime import datetime, timedelta
-import numpy as np
+
 
 from config.theme import get_cores
 from components.charts import criar_layout
@@ -22,11 +22,6 @@ def render_fornecedores(df):
         st.warning("Nenhum dado disponivel.")
         return
 
-    # ========== ALERTAS E INSIGHTS ==========
-    _render_alertas(df, cores)
-
-    st.divider()
-
     # ========== KPIs ==========
     _render_kpis(df, cores)
 
@@ -34,11 +29,6 @@ def render_fornecedores(df):
 
     # ========== TOP FORNECEDORES (Valor Total) ==========
     _render_top_fornecedores(df, cores)
-
-    st.divider()
-
-    # ========== COMPARATIVO TRIMESTRAL ==========
-    _render_comparativo_trimestral(df, cores)
 
     st.divider()
 
@@ -339,127 +329,17 @@ def _render_top_fornecedores(df, cores):
     )
 
     st.plotly_chart(fig, use_container_width=True)
-
-
-def _render_comparativo_trimestral(df, cores):
-    """Comparativo trimestral dos top fornecedores"""
-
-    st.markdown("##### Comparativo Trimestral - Top 10 Fornecedores")
-
-    hoje = datetime.now()
-
-    # Trimestre atual e anterior
-    inicio_tri_atual = hoje - timedelta(days=90)
-    inicio_tri_anterior = hoje - timedelta(days=180)
-
-    df_atual = df[df['EMISSAO'] >= inicio_tri_atual].copy()
-    df_anterior = df[(df['EMISSAO'] >= inicio_tri_anterior) & (df['EMISSAO'] < inicio_tri_atual)].copy()
-
-    if len(df_atual) == 0 and len(df_anterior) == 0:
-        st.info("Dados insuficientes para comparativo trimestral")
-        return
-
-    # Top 10 por valor total (considerando ambos periodos)
-    grp_atual = df_atual.groupby('NOME_FORNECEDOR')['VALOR_ORIGINAL'].sum()
-    grp_anterior = df_anterior.groupby('NOME_FORNECEDOR')['VALOR_ORIGINAL'].sum()
-
-    df_comp = pd.DataFrame({
-        'Atual': grp_atual,
-        'Anterior': grp_anterior
-    }).fillna(0)
-    df_comp['Total'] = df_comp['Atual'] + df_comp['Anterior']
-    df_comp = df_comp.nlargest(10, 'Total')
-    df_comp = df_comp.sort_values('Total', ascending=True)
-
-    # Calcular variacao
-    df_comp['Variacao'] = np.where(
-        df_comp['Anterior'] > 0,
-        ((df_comp['Atual'] - df_comp['Anterior']) / df_comp['Anterior'] * 100),
-        np.where(df_comp['Atual'] > 0, 100, 0)
-    )
-
-    fig = go.Figure()
-
-    fig.add_trace(go.Bar(
-        y=[f[:30] for f in df_comp.index],
-        x=df_comp['Anterior'],
-        orientation='h',
-        name='Trimestre Anterior',
-        marker_color=cores['texto_secundario'],
-        text=[formatar_moeda(v) if v > 0 else '' for v in df_comp['Anterior']],
-        textposition='inside',
-        textfont=dict(size=9, color='white')
-    ))
-
-    fig.add_trace(go.Bar(
-        y=[f[:30] for f in df_comp.index],
-        x=df_comp['Atual'],
-        orientation='h',
-        name='Trimestre Atual',
-        marker_color=cores['primaria'],
-        text=[formatar_moeda(v) if v > 0 else '' for v in df_comp['Atual']],
-        textposition='inside',
-        textfont=dict(size=9, color='white')
-    ))
-
-    fig.update_layout(
-        criar_layout(380),
-        barmode='group',
-        margin=dict(l=10, r=10, t=10, b=10),
-        xaxis=dict(showticklabels=False, showgrid=False),
-        yaxis=dict(tickfont=dict(size=9, color=cores['texto'])),
-        legend=dict(
-            orientation='h',
-            yanchor='bottom',
-            y=1.02,
-            xanchor='right',
-            x=1,
-            font=dict(size=10, color=cores['texto'])
-        )
-    )
-
-    st.plotly_chart(fig, use_container_width=True)
-
-    # Cards de variacao
-    destaques = df_comp.sort_values('Variacao', ascending=False)
-    maiores_altas = destaques[destaques['Variacao'] > 0].head(3)
-    maiores_quedas = destaques[destaques['Variacao'] < 0].head(3)
-
-    col1, col2 = st.columns(2)
-
-    with col1:
-        if len(maiores_altas) > 0:
-            st.markdown("###### Maiores Altas")
-            for forn, row in maiores_altas.iterrows():
-                st.markdown(f"""
-                <div style="background: {cores['card']}; border-left: 3px solid {cores['sucesso']};
-                            border-radius: 4px; padding: 0.4rem 0.6rem; margin-bottom: 0.3rem;">
-                    <span style="color: {cores['texto']}; font-size: 0.8rem; font-weight: 600;">
-                        {forn[:30]}</span>
-                    <span style="color: {cores['sucesso']}; font-size: 0.8rem; float: right;">
-                        +{row['Variacao']:.0f}%</span>
-                </div>
-                """, unsafe_allow_html=True)
-
-    with col2:
-        if len(maiores_quedas) > 0:
-            st.markdown("###### Maiores Quedas")
-            for forn, row in maiores_quedas.iterrows():
-                st.markdown(f"""
-                <div style="background: {cores['card']}; border-left: 3px solid {cores['perigo']};
-                            border-radius: 4px; padding: 0.4rem 0.6rem; margin-bottom: 0.3rem;">
-                    <span style="color: {cores['texto']}; font-size: 0.8rem; font-weight: 600;">
-                        {forn[:30]}</span>
-                    <span style="color: {cores['perigo']}; font-size: 0.8rem; float: right;">
-                        {row['Variacao']:.0f}%</span>
-                </div>
-                """, unsafe_allow_html=True)
+    st.caption("Exibe o valor total emitido (VALOR_ORIGINAL) por fornecedor, dividido em Pago e Pendente.")
 
 
 def _render_ticket_medio(df, cores):
-    """Scatter plot: Ticket Medio x Qtd Titulos x Valor Total"""
+    """Ticket Medio geral e top 15 fornecedores em cards"""
 
-    st.markdown("##### Ticket Medio por Fornecedor")
+    st.markdown("##### Ticket Medio por Fornecedor (todos os fornecedores)")
+
+    if len(df) == 0:
+        st.info("Dados insuficientes")
+        return
 
     df_forn = df.groupby('NOME_FORNECEDOR').agg({
         'VALOR_ORIGINAL': 'sum',
@@ -468,112 +348,41 @@ def _render_ticket_medio(df, cores):
     df_forn.columns = ['Fornecedor', 'Total', 'Qtd']
     df_forn['Ticket'] = df_forn['Total'] / df_forn['Qtd']
 
-    # Classificar ABC
-    classes = _calcular_classe_abc(df)
-    df_forn['Classe'] = df_forn['Fornecedor'].map(classes).fillna('C')
+    # Metricas gerais
+    ticket_geral = df['VALOR_ORIGINAL'].sum() / len(df)
+    total_fornecedores = len(df_forn)
+    total_titulos = len(df)
 
-    # Filtrar fornecedores com pelo menos 2 titulos para scatter legivel
-    df_plot = df_forn[df_forn['Qtd'] >= 2].copy()
+    col1, col2, col3 = st.columns(3)
+    col1.metric("Ticket Medio Geral", formatar_moeda(ticket_geral))
+    col2.metric("Fornecedores", formatar_numero(total_fornecedores))
+    col3.metric("Titulos", formatar_numero(total_titulos))
 
-    if len(df_plot) == 0:
-        st.info("Dados insuficientes")
+    # Top 15 por ticket medio (min 2 titulos)
+    df_top = df_forn[df_forn['Qtd'] >= 2].nlargest(15, 'Ticket')
+
+    if len(df_top) == 0:
         return
 
-    # Normalizar tamanho dos bubbles
-    max_total = df_plot['Total'].max()
-    df_plot['Size'] = (df_plot['Total'] / max_total * 40).clip(lower=5)
+    st.markdown("###### Top 15 - Maior Ticket Medio")
 
-    cores_classe = {'A': cores['primaria'], 'B': cores['alerta'], 'C': cores['texto_secundario']}
-
-    fig = go.Figure()
-
-    for classe in ['A', 'B', 'C']:
-        df_c = df_plot[df_plot['Classe'] == classe]
-        if len(df_c) == 0:
-            continue
-
-        fig.add_trace(go.Scatter(
-            x=df_c['Qtd'],
-            y=df_c['Ticket'],
-            mode='markers',
-            name=f'Classe {classe}',
-            marker=dict(
-                size=df_c['Size'],
-                color=cores_classe[classe],
-                opacity=0.7,
-                line=dict(width=1, color=cores['borda'])
-            ),
-            text=df_c['Fornecedor'].str[:25],
-            customdata=np.stack([
-                df_c['Total'].values,
-                df_c['Qtd'].values,
-                df_c['Ticket'].values
-            ], axis=-1),
-            hovertemplate=(
-                '<b>%{text}</b><br>'
-                'Titulos: %{customdata[1]:.0f}<br>'
-                'Ticket Medio: R$ %{customdata[2]:,.0f}<br>'
-                'Total: R$ %{customdata[0]:,.0f}<extra></extra>'
-            )
-        ))
-
-    fig.update_layout(
-        criar_layout(350),
-        margin=dict(l=10, r=10, t=10, b=10),
-        xaxis=dict(
-            title='Quantidade de Titulos',
-            title_font=dict(size=10, color=cores['texto_secundario']),
-            tickfont=dict(size=9, color=cores['texto']),
-            showgrid=True,
-            gridcolor=cores['borda']
-        ),
-        yaxis=dict(
-            title='Ticket Medio (R$)',
-            title_font=dict(size=10, color=cores['texto_secundario']),
-            tickfont=dict(size=9, color=cores['texto']),
-            showgrid=True,
-            gridcolor=cores['borda']
-        ),
-        legend=dict(
-            orientation='h',
-            yanchor='bottom',
-            y=1.02,
-            xanchor='right',
-            x=1,
-            font=dict(size=10, color=cores['texto'])
-        )
-    )
-
-    st.plotly_chart(fig, use_container_width=True)
-
-    # Insights
-    col1, col2, col3 = st.columns(3)
-
-    # Maior ticket medio (min 3 titulos)
-    df_ticket_min3 = df_forn[df_forn['Qtd'] >= 3]
-    if len(df_ticket_min3) > 0:
-        maior_ticket = df_ticket_min3.nlargest(1, 'Ticket').iloc[0]
-        col1.metric(
-            "Maior Ticket Medio",
-            formatar_moeda(maior_ticket['Ticket']),
-            f"{maior_ticket['Fornecedor'][:20]}"
-        )
-
-    # Mais titulos
-    if len(df_forn) > 0:
-        mais_titulos = df_forn.nlargest(1, 'Qtd').iloc[0]
-        col2.metric(
-            "Mais Titulos",
-            formatar_numero(int(mais_titulos['Qtd'])),
-            f"{mais_titulos['Fornecedor'][:20]}"
-        )
-
-    # Media geral
-    ticket_geral = df['VALOR_ORIGINAL'].sum() / len(df) if len(df) > 0 else 0
-    col3.metric(
-        "Ticket Medio Geral",
-        formatar_moeda(ticket_geral)
-    )
+    # Renderizar em 3 colunas de 5 cards
+    cols = st.columns(3)
+    for i, (_, row) in enumerate(df_top.iterrows()):
+        col = cols[i % 3]
+        with col:
+            st.markdown(f"""
+            <div style="background: {cores['card']}; border-left: 3px solid {cores['primaria']};
+                        border-radius: 4px; padding: 0.5rem 0.7rem; margin-bottom: 0.4rem;">
+                <div style="color: {cores['texto']}; font-size: 0.78rem; font-weight: 600;
+                            white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
+                    {row['Fornecedor'][:28]}</div>
+                <div style="color: {cores['primaria']}; font-size: 0.85rem; font-weight: 700;">
+                    {formatar_moeda(row['Ticket'])}</div>
+                <div style="color: {cores['texto_secundario']}; font-size: 0.7rem;">
+                    {int(row['Qtd'])} titulos | Total: {formatar_moeda(row['Total'])}</div>
+            </div>
+            """, unsafe_allow_html=True)
 
 
 def _render_prazos_pagamento(df, cores):
@@ -689,8 +498,17 @@ def _render_prazos_pagamento(df, cores):
     with col2:
         st.markdown("###### Fornecedores que dao menos prazo")
 
-        # Top 10 menos prazo (excluir prazos negativos ou zero)
-        df_menos_prazo = df_forn_prazo[df_forn_prazo['Prazo'] > 0].nsmallest(10, 'Prazo')
+        # Recalcular excluindo titulos com prazo <= 2 dias
+        df_prazos_pos = df_prazos[df_prazos['PRAZO_CONCEDIDO'] > 2]
+        df_forn_prazo_pos = df_prazos_pos.groupby('NOME_FORNECEDOR').agg({
+            'PRAZO_CONCEDIDO': 'mean',
+            'VALOR_ORIGINAL': 'sum',
+            'NUMERO': 'count'
+        }).reset_index()
+        df_forn_prazo_pos.columns = ['Fornecedor', 'Prazo', 'Valor', 'Qtd']
+        df_forn_prazo_pos = df_forn_prazo_pos[df_forn_prazo_pos['Qtd'] >= 3]
+
+        df_menos_prazo = df_forn_prazo_pos.nsmallest(10, 'Prazo')
         df_menos_prazo = df_menos_prazo.sort_values('Prazo', ascending=True)
 
         if len(df_menos_prazo) > 0:
@@ -717,51 +535,75 @@ def _render_prazos_pagamento(df, cores):
         else:
             st.info("Dados insuficientes")
 
-    # Tabela comparativa
-    with st.expander("Ver detalhes por fornecedor"):
-        df_detalhe = df_prazos.copy()
+    # Pagamentos no dia da emissao (prazo = 0)
+    df_no_dia = df_prazos[df_prazos['PRAZO_CONCEDIDO'] == 0]
 
-        # Adicionar prazo real
-        if 'DT_BAIXA' in df_detalhe.columns:
-            df_detalhe['PRAZO_REAL'] = (df_detalhe['DT_BAIXA'] - df_detalhe['EMISSAO']).dt.days
+    if len(df_no_dia) > 0:
+        st.markdown("###### Pagamentos no Dia da Emissao (prazo = 0 dias)")
 
-        df_detalhe_grp = df_detalhe.groupby('NOME_FORNECEDOR').agg({
-            'PRAZO_CONCEDIDO': 'mean',
+        total_no_dia = df_no_dia['VALOR_ORIGINAL'].sum()
+        total_geral = df_prazos['VALOR_ORIGINAL'].sum()
+        pct_no_dia = (total_no_dia / total_geral * 100) if total_geral > 0 else 0
+
+        col1, col2, col3 = st.columns(3)
+        col1.metric("Valor Total no Dia", formatar_moeda(total_no_dia))
+        col2.metric("Titulos no Dia", formatar_numero(len(df_no_dia)))
+        col3.metric("% do Total Emitido", f"{pct_no_dia:.1f}%")
+
+        # Top 10 fornecedores com mais valor pago no dia
+        df_no_dia_forn = df_no_dia.groupby('NOME_FORNECEDOR').agg({
             'VALOR_ORIGINAL': 'sum',
-            'SALDO': 'sum',
             'NUMERO': 'count'
         }).reset_index()
+        df_no_dia_forn.columns = ['Fornecedor', 'Valor', 'Qtd']
+        df_no_dia_top = df_no_dia_forn.nlargest(10, 'Valor').sort_values('Valor', ascending=True)
 
-        # Adicionar prazo real medio (apenas dos pagos)
-        if 'PRAZO_REAL' in df_detalhe.columns:
-            prazo_real_grp = df_detalhe[df_detalhe['SALDO'] == 0].groupby('NOME_FORNECEDOR')['PRAZO_REAL'].mean()
-            df_detalhe_grp = df_detalhe_grp.merge(
-                prazo_real_grp.reset_index().rename(columns={'PRAZO_REAL': 'Prazo Real'}),
-                on='NOME_FORNECEDOR',
-                how='left'
-            )
-        else:
-            df_detalhe_grp['Prazo Real'] = None
+        fig = go.Figure()
 
-        df_detalhe_grp.columns = ['Fornecedor', 'Prazo Concedido', 'Valor Total', 'Saldo', 'Qtd', 'Prazo Real']
-        df_detalhe_grp['Diferenca'] = df_detalhe_grp['Prazo Real'] - df_detalhe_grp['Prazo Concedido']
+        fig.add_trace(go.Bar(
+            y=df_no_dia_top['Fornecedor'].str[:30],
+            x=df_no_dia_top['Valor'],
+            orientation='h',
+            marker_color=cores['alerta'],
+            text=[f"{formatar_moeda(v)} ({int(q)} tit.)" for v, q in zip(df_no_dia_top['Valor'], df_no_dia_top['Qtd'])],
+            textposition='outside',
+            textfont=dict(size=8, color=cores['texto'])
+        ))
 
-        # Formatar
-        df_show = df_detalhe_grp.copy()
-        df_show['Prazo Concedido'] = df_show['Prazo Concedido'].apply(lambda x: f"{x:.0f} dias" if pd.notna(x) else "-")
-        df_show['Prazo Real'] = df_show['Prazo Real'].apply(lambda x: f"{x:.0f} dias" if pd.notna(x) else "-")
-        df_show['Diferenca'] = df_show['Diferenca'].apply(lambda x: f"{x:+.0f} dias" if pd.notna(x) else "-")
-        df_show['Valor Total'] = df_show['Valor Total'].apply(lambda x: formatar_moeda(x, completo=True))
-        df_show['Saldo'] = df_show['Saldo'].apply(lambda x: formatar_moeda(x, completo=True))
-
-        df_show = df_show.sort_values('Qtd', ascending=False).head(50)
-
-        st.dataframe(
-            df_show[['Fornecedor', 'Prazo Concedido', 'Prazo Real', 'Diferenca', 'Valor Total', 'Qtd']],
-            use_container_width=True,
-            hide_index=True,
-            height=300
+        fig.update_layout(
+            criar_layout(300),
+            margin=dict(l=10, r=120, t=10, b=10),
+            xaxis=dict(showticklabels=False, showgrid=False),
+            yaxis=dict(tickfont=dict(size=9, color=cores['texto']))
         )
+
+        st.plotly_chart(fig, use_container_width=True)
+        st.caption("Titulos emitidos com vencimento no mesmo dia da emissao (prazo concedido = 0 dias).")
+
+    # Tabela comparativa - apenas titulos com prazo = 0
+    if len(df_no_dia) > 0:
+        with st.expander("Ver detalhes por fornecedor"):
+            df_detalhe_grp = df_no_dia.groupby('NOME_FORNECEDOR').agg({
+                'VALOR_ORIGINAL': 'sum',
+                'SALDO': 'sum',
+                'NUMERO': 'count'
+            }).reset_index()
+
+            df_detalhe_grp.columns = ['Fornecedor', 'Valor Total', 'Pendente', 'Qtd']
+            df_detalhe_grp['Pago'] = (df_detalhe_grp['Valor Total'] - df_detalhe_grp['Pendente']).clip(lower=0)
+
+            # Formatar
+            df_show = df_detalhe_grp.sort_values('Valor Total', ascending=False).head(50).copy()
+            df_show['Valor Total'] = df_show['Valor Total'].apply(lambda x: formatar_moeda(x, completo=True))
+            df_show['Pago'] = df_show['Pago'].apply(lambda x: formatar_moeda(x, completo=True))
+            df_show['Pendente'] = df_show['Pendente'].apply(lambda x: formatar_moeda(x, completo=True))
+
+            st.dataframe(
+                df_show[['Fornecedor', 'Valor Total', 'Pago', 'Pendente', 'Qtd']],
+                use_container_width=True,
+                hide_index=True,
+                height=300
+            )
 
 
 def _render_curva_abc(df, cores):
@@ -791,61 +633,21 @@ def _render_curva_abc(df, cores):
     val_b = df_abc[df_abc['CLASSE'] == 'B']['VALOR_ORIGINAL'].sum()
     val_c = df_abc[df_abc['CLASSE'] == 'C']['VALOR_ORIGINAL'].sum()
 
-    col1, col2 = st.columns([2, 1])
+    # Cards por classe + Concentracao
+    col_a, col_b, col_c, col_conc = st.columns(4)
 
-    with col1:
-        # Grafico Pareto
-        cores_abc = {'A': cores['primaria'], 'B': cores['alerta'], 'C': cores['texto_secundario']}
+    for col, classe, qtd, val, cor in [
+        (col_a, 'A', qtd_a, val_a, cores['primaria']),
+        (col_b, 'B', qtd_b, val_b, cores['alerta']),
+        (col_c, 'C', qtd_c, val_c, cores['texto_secundario'])
+    ]:
+        pct_forn = qtd / len(df_abc) * 100 if len(df_abc) > 0 else 0
+        pct_val = val / total * 100
 
-        df_show = df_abc.head(30)
-        fig = go.Figure()
-
-        fig.add_trace(go.Bar(
-            x=df_show['RANK'],
-            y=df_show['VALOR_ORIGINAL'],
-            name='Valor',
-            marker_color=[cores_abc[c] for c in df_show['CLASSE']]
-        ))
-
-        fig.add_trace(go.Scatter(
-            x=df_show['RANK'],
-            y=df_show['PCT_ACUM'],
-            name='% Acumulado',
-            mode='lines+markers',
-            line=dict(color=cores['texto'], width=2),
-            marker=dict(size=4),
-            yaxis='y2'
-        ))
-
-        fig.add_hline(y=80, line_dash="dash", line_color=cores['sucesso'], line_width=1, yref='y2')
-        fig.add_hline(y=95, line_dash="dash", line_color=cores['alerta'], line_width=1, yref='y2')
-
-        fig.update_layout(
-            criar_layout(320),
-            yaxis=dict(showticklabels=False, showgrid=False),
-            yaxis2=dict(overlaying='y', side='right', range=[0, 105], showgrid=False,
-                        tickfont=dict(size=9, color=cores['texto'])),
-            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1,
-                        font=dict(size=9, color=cores['texto'])),
-            margin=dict(l=10, r=40, t=30, b=30),
-            xaxis=dict(title='Rank', tickfont=dict(size=9, color=cores['texto']))
-        )
-
-        st.plotly_chart(fig, use_container_width=True)
-
-    with col2:
-        # Cards por classe
-        for classe, qtd, val, cor in [
-            ('A', qtd_a, val_a, cores['primaria']),
-            ('B', qtd_b, val_b, cores['alerta']),
-            ('C', qtd_c, val_c, cores['texto_secundario'])
-        ]:
-            pct_forn = qtd / len(df_abc) * 100 if len(df_abc) > 0 else 0
-            pct_val = val / total * 100
-
+        with col:
             st.markdown(f"""
             <div style="background: {cores['card']}; border-left: 4px solid {cor};
-                        border-radius: 4px; padding: 0.6rem; margin-bottom: 0.5rem;">
+                        border-radius: 4px; padding: 0.6rem;">
                 <p style="color: {cor}; font-size: 1rem; font-weight: 700; margin: 0;">
                     Classe {classe}</p>
                 <p style="color: {cores['texto']}; font-size: 0.85rem; margin: 0.2rem 0 0 0;">
@@ -855,17 +657,54 @@ def _render_curva_abc(df, cores):
             </div>
             """, unsafe_allow_html=True)
 
-        # Concentracao resumida
-        st.markdown("###### Concentracao")
+    with col_conc:
+        conc_lines = ""
         for n in [1, 5, 10, 20]:
             if n <= len(df_abc):
                 val_top = df_abc.head(n)['VALOR_ORIGINAL'].sum()
                 pct = val_top / total * 100
-                st.caption(f"Top {n}: **{pct:.1f}%** do total")
+                conc_lines += f"<p style='color: {cores['texto_secundario']}; font-size: 0.75rem; margin: 0.1rem 0;'>Top {n}: <b>{pct:.1f}%</b></p>"
+
+        st.markdown(f"""
+        <div style="background: {cores['card']}; border-left: 4px solid {cores['sucesso']};
+                    border-radius: 4px; padding: 0.6rem;">
+            <p style="color: {cores['sucesso']}; font-size: 1rem; font-weight: 700; margin: 0;">
+                Concentracao</p>
+            {conc_lines}
+        </div>
+        """, unsafe_allow_html=True)
+
+    # Selectbox para detalhar classe
+    classe_sel = st.selectbox(
+        "Detalhar fornecedores da classe:",
+        ['Selecione...', 'Classe A', 'Classe B', 'Classe C'],
+        key='abc_classe_detalhe'
+    )
+
+    if classe_sel != 'Selecione...':
+        letra = classe_sel[-1]  # A, B ou C
+        df_classe = df_abc[df_abc['CLASSE'] == letra].copy()
+
+        # Buscar pendente (SALDO) por fornecedor
+        df_saldo = df.groupby('NOME_FORNECEDOR')['SALDO'].sum().reset_index()
+        df_classe = df_classe.merge(df_saldo, on='NOME_FORNECEDOR', how='left')
+        df_classe['PAGO'] = (df_classe['VALOR_ORIGINAL'] - df_classe['SALDO']).clip(lower=0)
+
+        df_classe = df_classe.sort_values('VALOR_ORIGINAL', ascending=False)
+        df_show = df_classe[['NOME_FORNECEDOR', 'VALOR_ORIGINAL', 'PAGO', 'SALDO', 'PCT', 'PCT_ACUM']].copy()
+        df_show.columns = ['Fornecedor', 'Valor Emitido', 'Pago', 'Pendente', '% do Total', '% Acumulado']
+
+        df_show['Valor Emitido'] = df_show['Valor Emitido'].apply(lambda x: formatar_moeda(x, completo=True))
+        df_show['Pago'] = df_show['Pago'].apply(lambda x: formatar_moeda(x, completo=True))
+        df_show['Pendente'] = df_show['Pendente'].apply(lambda x: formatar_moeda(x, completo=True))
+        df_show['% do Total'] = df_show['% do Total'].apply(lambda x: f"{x:.2f}%")
+        df_show['% Acumulado'] = df_show['% Acumulado'].apply(lambda x: f"{x:.1f}%")
+
+        st.dataframe(df_show, use_container_width=True, hide_index=True, height=400)
 
 
 def _render_fornecedores_por_filial(df, cores):
-    """Fornecedores exclusivos vs compartilhados por filial/grupo"""
+    """Fornecedores por filial/grupo - quantidade e valor"""
 
     multiplos = _detectar_multiplos_grupos_forn(df)
 
@@ -881,104 +720,65 @@ def _render_fornecedores_por_filial(df, cores):
         df_aux = df.copy()
         df_aux['LABEL'] = df_aux['FILIAL'].astype(int).astype(str) + ' - ' + df_aux['NOME_FILIAL'].str.split(' - ').str[-1].str.strip()
 
-    # Para cada fornecedor, contar em quantas filiais/grupos aparece
-    forn_filiais = df_aux.groupby('NOME_FORNECEDOR')['LABEL'].nunique()
-    n_unidades = df_aux['LABEL'].nunique()
-
-    # Classificar: exclusivo (1 unidade) vs compartilhado (2+)
-    exclusivos = set(forn_filiais[forn_filiais == 1].index)
-    compartilhados = set(forn_filiais[forn_filiais > 1].index)
-
-    # Contar por unidade
-    unidades = sorted(df_aux['LABEL'].unique())
-    dados = []
-    for unidade in unidades:
-        forns_unidade = set(df_aux[df_aux['LABEL'] == unidade]['NOME_FORNECEDOR'].unique())
-        qtd_excl = len(forns_unidade & exclusivos)
-        qtd_comp = len(forns_unidade & compartilhados)
-        val_excl = df_aux[(df_aux['LABEL'] == unidade) & (df_aux['NOME_FORNECEDOR'].isin(exclusivos))]['VALOR_ORIGINAL'].sum()
-        val_comp = df_aux[(df_aux['LABEL'] == unidade) & (df_aux['NOME_FORNECEDOR'].isin(compartilhados))]['VALOR_ORIGINAL'].sum()
-        dados.append({
-            'Unidade': unidade,
-            'Exclusivos': qtd_excl,
-            'Compartilhados': qtd_comp,
-            'Val_Excl': val_excl,
-            'Val_Comp': val_comp
-        })
-
-    df_dados = pd.DataFrame(dados)
-    df_dados = df_dados.sort_values('Exclusivos', ascending=True)
+    # Agrupar por unidade
+    df_grp = df_aux.groupby('LABEL').agg(
+        Fornecedores=('NOME_FORNECEDOR', 'nunique'),
+        Valor=('VALOR_ORIGINAL', 'sum'),
+        Pendente=('SALDO', 'sum'),
+        Titulos=('NUMERO', 'count')
+    ).reset_index()
+    df_grp['Pago'] = df_grp['Valor'] - df_grp['Pendente']
 
     col1, col2 = st.columns(2)
 
     with col1:
-        st.markdown("###### Quantidade de Fornecedores")
+        st.markdown("###### Fornecedores por Unidade")
+        df_plot = df_grp.sort_values('Fornecedores', ascending=True)
 
-        fig = go.Figure()
-
-        fig.add_trace(go.Bar(
-            y=df_dados['Unidade'],
-            x=df_dados['Exclusivos'],
+        fig = go.Figure(go.Bar(
+            y=df_plot['LABEL'],
+            x=df_plot['Fornecedores'],
             orientation='h',
-            name='Exclusivos',
-            marker_color=cores['alerta'],
-            text=[str(v) for v in df_dados['Exclusivos']],
-            textposition='inside',
-            textfont=dict(size=9, color='white')
-        ))
-
-        fig.add_trace(go.Bar(
-            y=df_dados['Unidade'],
-            x=df_dados['Compartilhados'],
-            orientation='h',
-            name='Compartilhados',
-            marker_color=cores['info'],
-            text=[str(v) for v in df_dados['Compartilhados']],
-            textposition='inside',
-            textfont=dict(size=9, color='white')
+            marker_color=cores['sucesso'],
+            text=[f"{v} fornecedores" for v in df_plot['Fornecedores']],
+            textposition='outside',
+            textfont=dict(size=9, color=cores['texto']),
+            hovertemplate='<b>%{y}</b><br>%{x} fornecedores<extra></extra>'
         ))
 
         fig.update_layout(
             criar_layout(280),
-            barmode='stack',
-            margin=dict(l=10, r=10, t=10, b=10),
+            margin=dict(l=10, r=100, t=10, b=10),
             xaxis=dict(showticklabels=False, showgrid=False),
-            yaxis=dict(tickfont=dict(size=9, color=cores['texto'])),
-            legend=dict(
-                orientation='h',
-                yanchor='bottom',
-                y=1.02,
-                xanchor='right',
-                x=1,
-                font=dict(size=9, color=cores['texto'])
-            )
+            yaxis=dict(tickfont=dict(size=9, color=cores['texto']))
         )
 
         st.plotly_chart(fig, use_container_width=True)
 
     with col2:
-        st.markdown("###### Valor por Tipo")
+        st.markdown("###### Valor por Unidade")
+        df_plot = df_grp.sort_values('Valor', ascending=True)
 
         fig = go.Figure()
 
         fig.add_trace(go.Bar(
-            y=df_dados['Unidade'],
-            x=df_dados['Val_Excl'],
+            y=df_plot['LABEL'],
+            x=df_plot['Pago'],
             orientation='h',
-            name='Exclusivos',
-            marker_color=cores['alerta'],
-            text=[formatar_moeda(v) if v > 0 else '' for v in df_dados['Val_Excl']],
+            name='Pago',
+            marker_color=cores['sucesso'],
+            text=[formatar_moeda(v) if v > 0 else '' for v in df_plot['Pago']],
             textposition='inside',
             textfont=dict(size=9, color='white')
         ))
 
         fig.add_trace(go.Bar(
-            y=df_dados['Unidade'],
-            x=df_dados['Val_Comp'],
+            y=df_plot['LABEL'],
+            x=df_plot['Pendente'],
             orientation='h',
-            name='Compartilhados',
-            marker_color=cores['info'],
-            text=[formatar_moeda(v) if v > 0 else '' for v in df_dados['Val_Comp']],
+            name='Pendente',
+            marker_color=cores['alerta'],
+            text=[formatar_moeda(v) if v > 0 else '' for v in df_plot['Pendente']],
             textposition='inside',
             textfont=dict(size=9, color='white')
         ))
@@ -1000,12 +800,6 @@ def _render_fornecedores_por_filial(df, cores):
         )
 
         st.plotly_chart(fig, use_container_width=True)
-
-    # KPIs resumo
-    col1, col2, col3 = st.columns(3)
-    col1.metric("Total Fornecedores", formatar_numero(len(exclusivos) + len(compartilhados)))
-    col2.metric("Exclusivos", formatar_numero(len(exclusivos)), f"{len(exclusivos)/(len(exclusivos)+len(compartilhados))*100:.0f}%" if (len(exclusivos)+len(compartilhados)) > 0 else "0%")
-    col3.metric("Compartilhados", formatar_numero(len(compartilhados)), f"em 2+ {'grupos' if multiplos else 'filiais'}")
 
 
 def _render_matriz_filial_fornecedor(df, cores):
@@ -1100,72 +894,123 @@ def _render_por_categoria(df, cores):
     df_cat.columns = ['Categoria', 'Total', 'Pendente', 'Fornecedores']
     df_cat['Pago'] = df_cat['Total'] - df_cat['Pendente']
 
+    # Vencido por categoria
+    if 'STATUS' in df.columns:
+        df_vencido_cat = df[df['STATUS'] == 'Vencido'].groupby('DESCRICAO')['SALDO'].sum().reset_index()
+        df_vencido_cat.columns = ['Categoria', 'Vencido']
+        df_cat = df_cat.merge(df_vencido_cat, on='Categoria', how='left')
+        df_cat['Vencido'] = df_cat['Vencido'].fillna(0)
+    else:
+        df_cat['Vencido'] = 0
+    df_cat['A_Vencer'] = (df_cat['Pendente'] - df_cat['Vencido']).clip(lower=0)
+
     # Top 12
     df_top = df_cat.nlargest(12, 'Total')
     df_top = df_top.sort_values('Total', ascending=True)
 
-    col1, col2 = st.columns([2, 1])
+    col1, col2, col3 = st.columns(3)
 
     with col1:
+        st.markdown("###### Top 10 - Pago")
+        df_top_pago = df_top.sort_values('Pago', ascending=True).tail(10)
+
         fig = go.Figure()
-
         fig.add_trace(go.Bar(
-            y=df_top['Categoria'].str[:30],
-            x=df_top['Pago'],
+            y=df_top_pago['Categoria'].str[:30],
+            x=df_top_pago['Pago'],
             orientation='h',
-            name='Pago',
             marker_color=cores['sucesso'],
-            text=[formatar_moeda(v) if v > 0 else '' for v in df_top['Pago']],
-            textposition='inside',
-            textfont=dict(size=8, color='white')
+            text=[formatar_moeda(v) if v > 0 else '' for v in df_top_pago['Pago']],
+            textposition='outside',
+            textfont=dict(size=8, color=cores['texto'])
         ))
-
-        fig.add_trace(go.Bar(
-            y=df_top['Categoria'].str[:30],
-            x=df_top['Pendente'],
-            orientation='h',
-            name='Pendente',
-            marker_color=cores['alerta'],
-            text=[formatar_moeda(v) if v > 0 else '' for v in df_top['Pendente']],
-            textposition='inside',
-            textfont=dict(size=8, color='white')
-        ))
-
         fig.update_layout(
-            criar_layout(380),
-            barmode='stack',
-            margin=dict(l=10, r=10, t=10, b=10),
+            criar_layout(350),
+            margin=dict(l=10, r=80, t=10, b=10),
             xaxis=dict(showticklabels=False, showgrid=False),
             yaxis=dict(tickfont=dict(size=9, color=cores['texto'])),
-            legend=dict(
-                orientation='h',
-                yanchor='bottom',
-                y=1.02,
-                xanchor='right',
-                x=1,
-                font=dict(size=10, color=cores['texto'])
-            )
+            showlegend=False
         )
-
         st.plotly_chart(fig, use_container_width=True)
 
     with col2:
-        st.markdown("**Top 5 categorias:**")
-        for _, row in df_top.tail(5).iloc[::-1].iterrows():
-            pct_pago = (row['Pago'] / row['Total'] * 100) if row['Total'] > 0 else 0
-            st.markdown(f"""
-            <div style="background: {cores['card']}; border: 1px solid {cores['borda']};
-                        border-radius: 8px; padding: 0.5rem; margin-bottom: 0.5rem;">
-                <p style="color: {cores['texto']}; font-size: 0.8rem; font-weight: 600; margin: 0;">
-                    {row['Categoria'][:25]}</p>
-                <p style="color: {cores['texto_secundario']}; font-size: 0.7rem; margin: 0;">
-                    {int(row['Fornecedores'])} fornecedores</p>
-                <p style="color: {cores['texto']}; font-size: 0.75rem; margin: 0;">
-                    Total: {formatar_moeda(row['Total'])}</p>
-                <p style="color: {cores['sucesso']}; font-size: 0.7rem; margin: 0;">
-                    {pct_pago:.0f}% pago</p>
-            </div>
-            """, unsafe_allow_html=True)
+        st.markdown("###### Top 10 - Pendente (a vencer)")
+        df_top_avencer = df_top.sort_values('A_Vencer', ascending=True).tail(10)
+
+        fig = go.Figure()
+        fig.add_trace(go.Bar(
+            y=df_top_avencer['Categoria'].str[:30],
+            x=df_top_avencer['A_Vencer'],
+            orientation='h',
+            marker_color=cores['alerta'],
+            text=[formatar_moeda(v) if v > 0 else '' for v in df_top_avencer['A_Vencer']],
+            textposition='outside',
+            textfont=dict(size=8, color=cores['texto'])
+        ))
+        fig.update_layout(
+            criar_layout(350),
+            margin=dict(l=10, r=80, t=10, b=10),
+            xaxis=dict(showticklabels=False, showgrid=False),
+            yaxis=dict(tickfont=dict(size=9, color=cores['texto'])),
+            showlegend=False
+        )
+        st.plotly_chart(fig, use_container_width=True)
+
+    with col3:
+        st.markdown("###### Top 10 - Vencido")
+        df_top_venc = df_top.sort_values('Vencido', ascending=True).tail(10)
+
+        fig = go.Figure()
+        fig.add_trace(go.Bar(
+            y=df_top_venc['Categoria'].str[:30],
+            x=df_top_venc['Vencido'],
+            orientation='h',
+            marker_color=cores['perigo'],
+            text=[formatar_moeda(v) if v > 0 else '' for v in df_top_venc['Vencido']],
+            textposition='outside',
+            textfont=dict(size=8, color=cores['texto'])
+        ))
+        fig.update_layout(
+            criar_layout(350),
+            margin=dict(l=10, r=80, t=10, b=10),
+            xaxis=dict(showticklabels=False, showgrid=False),
+            yaxis=dict(tickfont=dict(size=9, color=cores['texto'])),
+            showlegend=False
+        )
+        st.plotly_chart(fig, use_container_width=True)
+
+    # Detalhar categoria
+    categorias_lista = df_top.sort_values('Total', ascending=False)['Categoria'].tolist()
+    cat_sel = st.selectbox(
+        "Detalhar categoria:",
+        options=categorias_lista,
+        key="forn_cat_detalhe"
+    )
+
+    if cat_sel:
+        row_cat = df_top[df_top['Categoria'] == cat_sel].iloc[0]
+        pct_pago = (row_cat['Pago'] / row_cat['Total'] * 100) if row_cat['Total'] > 0 else 0
+
+        col_r1, col_r2, col_r3 = st.columns(3)
+        col_r1.metric("Total", formatar_moeda(row_cat['Total']))
+        col_r2.metric("Pendente", formatar_moeda(row_cat['Pendente']))
+        col_r3.metric("Fornecedores", f"{int(row_cat['Fornecedores'])} | {pct_pago:.0f}% pago")
+
+        # Fornecedores da categoria selecionada
+        df_cat_forn = df[df['DESCRICAO'] == cat_sel].groupby('NOME_FORNECEDOR').agg({
+            'VALOR_ORIGINAL': 'sum',
+            'SALDO': 'sum',
+            'NUMERO': 'count'
+        }).reset_index()
+        df_cat_forn.columns = ['Fornecedor', 'Total', 'Pendente', 'Qtd']
+        df_cat_forn = df_cat_forn.sort_values('Total', ascending=False)
+
+        df_cat_show = df_cat_forn.copy()
+        df_cat_show['Fornecedor'] = df_cat_show['Fornecedor'].str[:25]
+        df_cat_show['Total'] = df_cat_show['Total'].apply(lambda x: formatar_moeda(x, completo=True))
+        df_cat_show['Pendente'] = df_cat_show['Pendente'].apply(lambda x: formatar_moeda(x, completo=True))
+
+        st.dataframe(df_cat_show, use_container_width=True, hide_index=True, height=280)
 
 
 def _render_consulta_fornecedor(df, cores):
@@ -1284,7 +1129,7 @@ def _render_consulta_fornecedor(df, cores):
             st.info("Historico insuficiente para grafico")
 
     with tab2:
-        colunas = ['NOME_FILIAL', 'NUMERO', 'DESCRICAO', 'EMISSAO', 'VENCIMENTO', 'VALOR_ORIGINAL', 'SALDO']
+        colunas = ['NOME_FILIAL', 'TIPO', 'NUMERO', 'DESCRICAO', 'EMISSAO', 'VENCIMENTO', 'VALOR_ORIGINAL', 'SALDO']
         colunas_disp = [c for c in colunas if c in df_forn.columns]
         df_tab = df_forn[colunas_disp].copy()
 
@@ -1298,12 +1143,13 @@ def _render_consulta_fornecedor(df, cores):
 
         nomes = {
             'NOME_FILIAL': 'Filial',
-            'NUMERO': 'NF/Doc',
+            'TIPO': 'Tipo',
+            'NUMERO': 'Numero Doc',
             'DESCRICAO': 'Categoria',
             'EMISSAO': 'Emissao',
             'VENCIMENTO': 'Vencimento',
             'VALOR_ORIGINAL': 'Valor',
-            'SALDO': 'Saldo'
+            'SALDO': 'Pendente'
         }
         df_tab.columns = [nomes.get(c, c) for c in df_tab.columns]
 
@@ -1321,7 +1167,7 @@ def _render_ranking(df, cores):
     with col1:
         ordenar = st.selectbox(
             "Ordenar por",
-            ["Valor Total", "Valor Pago", "Saldo Pendente"],
+            ["Valor Total", "Valor Pago", "Saldo Pendente", "Vencido"],
             key="rank_ordem"
         )
 
@@ -1341,6 +1187,15 @@ def _render_ranking(df, cores):
     df_rank['Pago'] = df_rank['Total'] - df_rank['Pendente']
     df_rank['% Pago'] = ((df_rank['Pago']) / df_rank['Total'] * 100).round(1)
 
+    # Vencido por fornecedor
+    if 'STATUS' in df.columns:
+        df_venc = df[df['STATUS'] == 'Vencido'].groupby('NOME_FORNECEDOR')['SALDO'].sum().reset_index()
+        df_venc.columns = ['Fornecedor', 'Vencido']
+        df_rank = df_rank.merge(df_venc, on='Fornecedor', how='left')
+        df_rank['Vencido'] = df_rank['Vencido'].fillna(0)
+    else:
+        df_rank['Vencido'] = 0
+
     # Classe ABC
     classes = _calcular_classe_abc(df)
     df_rank['Classe'] = df_rank['Fornecedor'].map(classes).fillna('C')
@@ -1356,6 +1211,8 @@ def _render_ranking(df, cores):
         df_rank = df_rank.sort_values('Total', ascending=False)
     elif ordenar == "Valor Pago":
         df_rank = df_rank.sort_values('Pago', ascending=False)
+    elif ordenar == "Vencido":
+        df_rank = df_rank.sort_values('Vencido', ascending=False)
     else:
         df_rank = df_rank.sort_values('Pendente', ascending=False)
 
@@ -1366,8 +1223,9 @@ def _render_ranking(df, cores):
     df_show['Total'] = df_show['Total'].apply(lambda x: formatar_moeda(x, completo=True))
     df_show['Pago'] = df_show['Pago'].apply(lambda x: formatar_moeda(x, completo=True))
     df_show['Pendente'] = df_show['Pendente'].apply(lambda x: formatar_moeda(x, completo=True))
+    df_show['Vencido'] = df_show['Vencido'].apply(lambda x: formatar_moeda(x, completo=True))
 
-    df_show = df_show[['Fornecedor', 'Classe', 'Total', 'Pago', 'Pendente', 'Titulos', '% Pago']]
+    df_show = df_show[['Fornecedor', 'Classe', 'Total', 'Pago', 'Pendente', 'Vencido', 'Titulos', '% Pago']]
 
     st.dataframe(
         df_show,

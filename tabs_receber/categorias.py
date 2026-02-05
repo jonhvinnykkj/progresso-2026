@@ -1,10 +1,11 @@
 """
-Aba Categorias - Análise completa por categoria - Contas a Receber
+Aba Categorias - Analise completa por categoria com comportamento de recebimento
 """
 import streamlit as st
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
+from datetime import datetime, timedelta
 
 from config.theme import get_cores
 from components.charts import criar_layout
@@ -13,20 +14,94 @@ from config.settings import GRUPOS_FILIAIS, get_grupo_filial
 
 
 def render_categorias_receber(df):
-    """Renderiza a aba de Categorias"""
+    """Renderiza a aba de Categorias - Contas a Receber"""
     cores = get_cores()
 
     if len(df) == 0:
-        st.warning("Nenhum dado disponível para o período selecionado.")
+        st.warning("Nenhum dado disponivel.")
         return
 
-    # Usar NOME_CLIENTE para contagem (CLIENTE pode nao existir)
-    col_count = 'CLIENTE' if 'CLIENTE' in df.columns else 'NOME_CLIENTE'
+    # Calcular dataframes
+    df_pendentes = df[df['SALDO'] > 0]
+    df_vencidos = df[df['STATUS'] == 'Vencido'] if 'STATUS' in df.columns else pd.DataFrame()
+    df_recebidos = df[df['SALDO'] == 0].copy()
+
+    # Computar colunas de prazo/pontualidade para recebidos
+    if 'DT_BAIXA' in df_recebidos.columns and len(df_recebidos) > 0:
+        df_recebidos['DIAS_PARA_RECEBER'] = (df_recebidos['DT_BAIXA'] - df_recebidos['EMISSAO']).dt.days
+        df_recebidos['DIAS_ATRASO_RECEB'] = (df_recebidos['DT_BAIXA'] - df_recebidos['VENCIMENTO']).dt.days
+
+    # Dados agregados por categoria
+    df_cat = _preparar_dados_categoria(df, df_recebidos)
+
+    # ========== KPIs ==========
+    _render_kpis(df_cat, df, df_recebidos, df_vencidos, cores)
+
+    st.divider()
+
+    # ========== LINHA 1: Distribuicao ==========
+    col1, col2 = st.columns(2)
+
+    with col1:
+        _render_treemap(df_cat, cores)
+
+    with col2:
+        _render_donut(df_cat, cores)
+
+    st.divider()
+
+    # ========== EVOLUCAO MENSAL ==========
+    _render_evolucao_mensal(df, cores)
+
+    st.divider()
+
+    # ========== PARETO / ABC ==========
+    _render_pareto_abc(df_cat, cores)
+
+    st.divider()
+
+    # ========== COMPORTAMENTO DE RECEBIMENTO ==========
+    _render_prazo_por_categoria(df_recebidos, cores)
+
+    st.divider()
+
+    # ========== SAZONALIDADE ==========
+    _render_sazonalidade(df, cores)
+
+    st.divider()
+
+    # ========== MATRIZ FILIAL x CATEGORIA ==========
+    _render_matriz_filial_categoria(df, cores)
+
+    st.divider()
+
+    # ========== TOP 10 CATEGORIAS ==========
+    _render_top_categorias(df_cat, cores)
+
+    st.divider()
+
+    # ========== VENCIDOS POR CATEGORIA ==========
+    _render_vencidos_por_categoria(df_vencidos, cores)
+
+    st.divider()
+
+    # ========== BUSCA CATEGORIA ==========
+    _render_busca_categoria(df, df_recebidos, df_vencidos, cores)
+
+    st.divider()
+
+    # ========== RANKING ==========
+    _render_ranking(df_cat, df_recebidos, cores)
+
+
+def _preparar_dados_categoria(df, df_recebidos):
+    """Prepara dados agregados por categoria"""
 
     df_cat = df.groupby('DESCRICAO').agg({
         'VALOR_ORIGINAL': 'sum',
         'SALDO': 'sum',
-        'NOME_CLIENTE': ['count', 'nunique'],
+        'CLIENTE': 'count',
+        'NOME_CLIENTE': 'nunique',
         'NOME_FILIAL': 'nunique'
     }).reset_index()
 
@@ -35,372 +110,32 @@ def render_categorias_receber(df):
     df_cat['Pct_Recebido'] = (df_cat['Recebido'] / df_cat['Total'] * 100).fillna(0).round(1)
     df_cat = df_cat.sort_values('Total', ascending=False)
 
-    # KPIs
-    _render_kpis_categorias(df_cat, df, cores)
+    return df_cat
 
-    st.divider()
 
-    # NOVO: Prazo médio por categoria (Emissão x Vencimento)
-    _render_prazo_por_categoria(df, cores)
-
-    st.divider()
-
-    # Linha 1: Treemap + Donut
-    col1, col2 = st.columns(2)
-
-    with col1:
-        _render_treemap(df_cat, cores)
-
-    with col2:
-        _render_donut_categorias(df_cat, cores)
-
-    st.divider()
-
-    # Linha 2: Top Categorias + Evolução
-    col1, col2 = st.columns(2)
-
-    with col1:
-        _render_top_categorias(df_cat, cores)
-
-    with col2:
-        _render_evolucao_categorias(df, cores)
-
-    st.divider()
-
-    # NOVO: Aging por Categoria + Categorias Críticas
-    col1, col2 = st.columns(2)
-
-    with col1:
-        _render_aging_por_categoria(df, cores)
-
-    with col2:
-        _render_categorias_criticas(df, cores)
-
-    st.divider()
-
-    # NOVO: Heatmap Categoria x Filial + Sazonalidade
-    col1, col2 = st.columns(2)
-
-    with col1:
-        _render_heatmap_categoria_filial(df, cores)
-
-    with col2:
-        _render_sazonalidade_categorias(df, cores)
-
-    st.divider()
-
-    # Consulta de categoria específica
-    _render_detalhe_categoria(df, df_cat, cores)
-
-    st.divider()
-
-    # Ranking completo
-    _render_ranking_categorias(df_cat, cores)
-
-
-def _render_prazo_por_categoria(df, cores):
-    """Prazo médio por categoria - dias entre emissão e vencimento - com detalhamento por cliente"""
-
-    st.markdown("##### Prazo Médio por Categoria (Emissão → Vencimento)")
-
-    # Calcular prazo (dias entre emissão e vencimento)
-    df_prazo = df.copy()
-    df_prazo['PRAZO_DIAS'] = (df_prazo['VENCIMENTO'] - df_prazo['EMISSAO']).dt.days
-
-    # Remover valores inválidos (negativos ou muito altos)
-    df_prazo = df_prazo[(df_prazo['PRAZO_DIAS'] >= 0) & (df_prazo['PRAZO_DIAS'] <= 365)]
-
-    if len(df_prazo) == 0:
-        st.warning("Sem dados válidos para calcular prazo médio.")
-        return
-
-    # Agrupar por categoria
-    df_cat_prazo = df_prazo.groupby('DESCRICAO').agg({
-        'PRAZO_DIAS': ['mean', 'median', 'min', 'max', 'std'],
-        'VALOR_ORIGINAL': 'sum',
-        'NOME_CLIENTE': 'nunique'
-    }).reset_index()
-
-    df_cat_prazo.columns = ['Categoria', 'Prazo_Medio', 'Prazo_Mediana', 'Prazo_Min', 'Prazo_Max', 'Prazo_Desvio', 'Valor_Total', 'Clientes']
-    df_cat_prazo = df_cat_prazo.sort_values('Valor_Total', ascending=False)
-
-    # Estatísticas gerais no topo
-    prazo_geral = df_prazo['PRAZO_DIAS'].mean()
-    prazo_mediana_geral = df_prazo['PRAZO_DIAS'].median()
-
-    col1, col2, col3, col4 = st.columns(4)
-    with col1:
-        st.metric("Prazo Médio Geral", f"{prazo_geral:.0f} dias")
-    with col2:
-        st.metric("Mediana Geral", f"{prazo_mediana_geral:.0f} dias")
-    with col3:
-        idx_maior = df_cat_prazo['Prazo_Medio'].idxmax()
-        cat_maior_prazo = df_cat_prazo.loc[idx_maior, 'Categoria'] if len(df_cat_prazo) > 0 else "N/A"
-        maior_prazo = df_cat_prazo['Prazo_Medio'].max()
-        st.metric("Maior Prazo", f"{cat_maior_prazo[:18]}...", f"{maior_prazo:.0f} dias", delta_color="off")
-    with col4:
-        idx_menor = df_cat_prazo['Prazo_Medio'].idxmin()
-        cat_menor_prazo = df_cat_prazo.loc[idx_menor, 'Categoria'] if len(df_cat_prazo) > 0 else "N/A"
-        menor_prazo = df_cat_prazo['Prazo_Medio'].min()
-        st.metric("Menor Prazo", f"{cat_menor_prazo[:18]}...", f"{menor_prazo:.0f} dias", delta_color="off")
-
-    st.markdown("")
-
-    # Exibir em duas colunas: gráfico de barras e tabela
-    col1, col2 = st.columns([3, 2])
-
-    with col1:
-        # Top 15 categorias por valor - mostrar prazo médio
-        df_top = df_cat_prazo.head(15).copy()
-        df_top = df_top.sort_values('Prazo_Medio', ascending=True)
-
-        # Cor baseada no prazo (verde = curto, vermelho = longo)
-        cores_barras = []
-        for prazo in df_top['Prazo_Medio']:
-            if prazo <= 15:
-                cores_barras.append(cores['sucesso'])
-            elif prazo <= 30:
-                cores_barras.append(cores['primaria'])
-            elif prazo <= 45:
-                cores_barras.append(cores['alerta'])
-            elif prazo <= 60:
-                cores_barras.append('#f97316')
-            else:
-                cores_barras.append(cores['perigo'])
-
-        fig = go.Figure(go.Bar(
-            y=df_top['Categoria'].str[:25],
-            x=df_top['Prazo_Medio'],
-            orientation='h',
-            marker_color=cores_barras,
-            text=[f"{int(p)} dias" for p in df_top['Prazo_Medio']],
-            textposition='outside',
-            textfont=dict(size=9),
-            hovertemplate="<b>%{y}</b><br>Prazo Médio: %{x:.0f} dias<extra></extra>"
-        ))
-
-        fig.update_layout(
-            criar_layout(320),
-            xaxis_title="Prazo Médio (dias)",
-            margin=dict(l=10, r=50, t=10, b=30)
-        )
-
-        st.plotly_chart(fig, use_container_width=True)
-
-    with col2:
-        # Tabela resumo
-        df_tabela = df_cat_prazo.head(15).copy()
-        df_tabela['Prazo_Medio'] = df_tabela['Prazo_Medio'].round(0).astype(int)
-        df_tabela['Prazo_Mediana'] = df_tabela['Prazo_Mediana'].round(0).astype(int)
-        df_tabela['Valor_Total'] = df_tabela['Valor_Total'].apply(lambda x: formatar_moeda(x, completo=True))
-
-        df_show = df_tabela[['Categoria', 'Prazo_Medio', 'Prazo_Mediana', 'Valor_Total', 'Clientes']].copy()
-        df_show.columns = ['Categoria', 'Média (dias)', 'Mediana', 'Valor Total', 'Clientes']
-
-        st.dataframe(
-            df_show,
-            use_container_width=True,
-            hide_index=True,
-            height=320
-        )
-
-    # ========== DETALHAMENTO POR CLIENTE ==========
-    st.markdown("---")
-    st.markdown("###### Detalhamento por Cliente")
-
-    # Filtros
-    col_filtro1, col_filtro2, col_filtro3 = st.columns([2, 2, 1])
-
-    with col_filtro1:
-        categorias_lista = ['Todas as Categorias'] + df_cat_prazo['Categoria'].tolist()
-        categoria_selecionada = st.selectbox(
-            "Filtrar por Categoria",
-            categorias_lista,
-            key="prazo_cat_filter"
-        )
-
-    with col_filtro2:
-        faixas_prazo = ['Todos os Prazos', 'Até 15 dias', '16-30 dias', '31-45 dias', '46-60 dias', 'Acima de 60 dias']
-        faixa_selecionada = st.selectbox(
-            "Filtrar por Faixa de Prazo",
-            faixas_prazo,
-            key="prazo_faixa_filter"
-        )
-
-    with col_filtro3:
-        ordenar_por = st.selectbox(
-            "Ordenar por",
-            ['Valor Total', 'Prazo Médio', 'Qtd Títulos'],
-            key="prazo_ordenar"
-        )
-
-    # Aplicar filtros
-    df_filtrado = df_prazo.copy()
-
-    if categoria_selecionada != 'Todas as Categorias':
-        df_filtrado = df_filtrado[df_filtrado['DESCRICAO'] == categoria_selecionada]
-
-    # Agrupar por cliente (dentro da categoria se filtrada)
-    if categoria_selecionada != 'Todas as Categorias':
-        # Quando uma categoria está selecionada, mostrar clientes dessa categoria
-        df_clientes = df_filtrado.groupby('NOME_CLIENTE').agg({
-            'PRAZO_DIAS': ['mean', 'median', 'min', 'max', 'count'],
-            'VALOR_ORIGINAL': 'sum',
-            'SALDO': 'sum'
-        }).reset_index()
-        df_clientes.columns = ['Cliente', 'Prazo_Medio', 'Prazo_Mediana', 'Prazo_Min', 'Prazo_Max', 'Qtd_Titulos', 'Valor_Total', 'Saldo']
-    else:
-        # Quando todas categorias, mostrar cliente + categoria
-        df_clientes = df_filtrado.groupby(['NOME_CLIENTE', 'DESCRICAO']).agg({
-            'PRAZO_DIAS': ['mean', 'median', 'min', 'max', 'count'],
-            'VALOR_ORIGINAL': 'sum',
-            'SALDO': 'sum'
-        }).reset_index()
-        df_clientes.columns = ['Cliente', 'Categoria', 'Prazo_Medio', 'Prazo_Mediana', 'Prazo_Min', 'Prazo_Max', 'Qtd_Titulos', 'Valor_Total', 'Saldo']
-
-    # Filtrar por faixa de prazo
-    if faixa_selecionada == 'Até 15 dias':
-        df_clientes = df_clientes[df_clientes['Prazo_Medio'] <= 15]
-    elif faixa_selecionada == '16-30 dias':
-        df_clientes = df_clientes[(df_clientes['Prazo_Medio'] > 15) & (df_clientes['Prazo_Medio'] <= 30)]
-    elif faixa_selecionada == '31-45 dias':
-        df_clientes = df_clientes[(df_clientes['Prazo_Medio'] > 30) & (df_clientes['Prazo_Medio'] <= 45)]
-    elif faixa_selecionada == '46-60 dias':
-        df_clientes = df_clientes[(df_clientes['Prazo_Medio'] > 45) & (df_clientes['Prazo_Medio'] <= 60)]
-    elif faixa_selecionada == 'Acima de 60 dias':
-        df_clientes = df_clientes[df_clientes['Prazo_Medio'] > 60]
-
-    # Ordenar
-    if ordenar_por == 'Valor Total':
-        df_clientes = df_clientes.sort_values('Valor_Total', ascending=False)
-    elif ordenar_por == 'Prazo Médio':
-        df_clientes = df_clientes.sort_values('Prazo_Medio', ascending=False)
-    else:
-        df_clientes = df_clientes.sort_values('Qtd_Titulos', ascending=False)
-
-    if len(df_clientes) == 0:
-        st.info("Nenhum cliente encontrado com os filtros selecionados.")
-        return
-
-    # Layout: Gráfico + Tabela
-    col_graf, col_tab = st.columns([1, 1])
-
-    with col_graf:
-        # Gráfico dos top 10 clientes
-        df_plot = df_clientes.head(10).copy()
-
-        # Definir cor baseada no prazo
-        def get_cor_prazo(prazo):
-            if prazo <= 15:
-                return cores['sucesso']
-            elif prazo <= 30:
-                return cores['primaria']
-            elif prazo <= 45:
-                return cores['alerta']
-            elif prazo <= 60:
-                return '#f97316'
-            else:
-                return cores['perigo']
-
-        cores_graf = [get_cor_prazo(p) for p in df_plot['Prazo_Medio']]
-
-        fig = go.Figure()
-
-        fig.add_trace(go.Bar(
-            y=df_plot['Cliente'].str[:30],
-            x=df_plot['Prazo_Medio'],
-            orientation='h',
-            marker_color=cores_graf,
-            text=[f"{int(p)}d | {formatar_moeda(v)}" for p, v in zip(df_plot['Prazo_Medio'], df_plot['Valor_Total'])],
-            textposition='outside',
-            textfont=dict(size=8),
-            hovertemplate="<b>%{y}</b><br>Prazo: %{x:.0f} dias<extra></extra>"
-        ))
-
-        fig.update_layout(
-            criar_layout(350),
-            xaxis_title="Prazo Médio (dias)",
-            yaxis={'autorange': 'reversed'},
-            margin=dict(l=10, r=100, t=10, b=30)
-        )
-
-        st.plotly_chart(fig, use_container_width=True)
-
-    with col_tab:
-        # Tabela detalhada
-        df_tabela_cli = df_clientes.head(50).copy()
-        df_tabela_cli['Prazo_Medio'] = df_tabela_cli['Prazo_Medio'].round(0).astype(int)
-        df_tabela_cli['Valor_Fmt'] = df_tabela_cli['Valor_Total'].apply(lambda x: formatar_moeda(x, completo=True))
-        df_tabela_cli['Saldo_Fmt'] = df_tabela_cli['Saldo'].apply(lambda x: formatar_moeda(x, completo=True))
-
-        if categoria_selecionada != 'Todas as Categorias':
-            df_show_cli = df_tabela_cli[['Cliente', 'Prazo_Medio', 'Qtd_Titulos', 'Valor_Fmt', 'Saldo_Fmt']].copy()
-            df_show_cli.columns = ['Cliente', 'Prazo (dias)', 'Títulos', 'Valor Total', 'Saldo']
-        else:
-            df_show_cli = df_tabela_cli[['Cliente', 'Categoria', 'Prazo_Medio', 'Qtd_Titulos', 'Valor_Fmt']].copy()
-            df_show_cli.columns = ['Cliente', 'Categoria', 'Prazo (dias)', 'Títulos', 'Valor Total']
-
-        st.dataframe(
-            df_show_cli,
-            use_container_width=True,
-            hide_index=True,
-            height=350
-        )
-
-    # Resumo do filtro
-    total_clientes = len(df_clientes)
-    total_valor = df_clientes['Valor_Total'].sum()
-    prazo_medio_filtro = df_clientes['Prazo_Medio'].mean() if len(df_clientes) > 0 else 0
-
-    st.markdown(f"""
-    <div style="background: {cores['card']}; border: 1px solid {cores['borda']}; border-radius: 8px;
-                padding: 0.75rem; margin-top: 0.5rem;">
-        <div style="display: flex; justify-content: space-around; text-align: center;">
-            <div>
-                <span style="color: {cores['texto_secundario']}; font-size: 0.75rem;">Clientes</span><br>
-                <span style="color: {cores['texto']}; font-weight: 700;">{total_clientes}</span>
-            </div>
-            <div>
-                <span style="color: {cores['texto_secundario']}; font-size: 0.75rem;">Valor Total</span><br>
-                <span style="color: {cores['sucesso']}; font-weight: 700;">{formatar_moeda(total_valor)}</span>
-            </div>
-            <div>
-                <span style="color: {cores['texto_secundario']}; font-size: 0.75rem;">Prazo Médio</span><br>
-                <span style="color: {cores['primaria']}; font-weight: 700;">{prazo_medio_filtro:.0f} dias</span>
-            </div>
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
-
-    # Expander com títulos detalhados
-    if categoria_selecionada != 'Todas as Categorias':
-        with st.expander(f"Ver títulos da categoria: {categoria_selecionada}"):
-            df_titulos = df_filtrado[['NOME_FILIAL', 'NOME_CLIENTE', 'EMISSAO', 'VENCIMENTO', 'PRAZO_DIAS', 'VALOR_ORIGINAL', 'SALDO', 'STATUS']].copy()
-            df_titulos = df_titulos.sort_values('VALOR_ORIGINAL', ascending=False).head(100)
-            df_titulos['EMISSAO'] = df_titulos['EMISSAO'].dt.strftime('%d/%m/%Y')
-            df_titulos['VENCIMENTO'] = df_titulos['VENCIMENTO'].dt.strftime('%d/%m/%Y')
-            df_titulos['VALOR_ORIGINAL'] = df_titulos['VALOR_ORIGINAL'].apply(lambda x: formatar_moeda(x, completo=True))
-            df_titulos['SALDO'] = df_titulos['SALDO'].apply(lambda x: formatar_moeda(x, completo=True))
-            df_titulos.columns = ['Filial', 'Cliente', 'Emissão', 'Vencimento', 'Prazo (dias)', 'Valor', 'Saldo', 'Status']
-            st.dataframe(df_titulos, use_container_width=True, hide_index=True, height=400)
-
-
-def _render_kpis_categorias(df_cat, df, cores):
-    """KPIs de resumo de categorias"""
+def _render_kpis(df_cat, df, df_recebidos, df_vencidos, cores):
+    """KPIs principais"""
 
     total_categorias = len(df_cat)
     total_valor = df_cat['Total'].sum()
-    total_pendente = df_cat['Pendente'].sum()
+    total_vencido = df_vencidos['SALDO'].sum() if len(df_vencidos) > 0 else 0
 
-    top_cat = df_cat.iloc[0]['Categoria'] if len(df_cat) > 0 else "N/A"
-    top_cat_valor = df_cat.iloc[0]['Total'] if len(df_cat) > 0 else 0
-    pct_top = (top_cat_valor / total_valor * 100) if total_valor > 0 else 0
+    # Taxa pontualidade geral
+    taxa_pontual = 0
+    if len(df_recebidos) > 0 and 'DIAS_ATRASO_RECEB' in df_recebidos.columns:
+        atraso = df_recebidos['DIAS_ATRASO_RECEB'].dropna()
+        if len(atraso) > 0:
+            taxa_pontual = (atraso <= 0).sum() / len(atraso) * 100
 
-    df_cat_sorted = df_cat.sort_values('Total', ascending=False)
-    df_cat_sorted['PCT_ACUM'] = df_cat_sorted['Total'].cumsum() / total_valor * 100
-    cat_80 = (df_cat_sorted['PCT_ACUM'] <= 80).sum()
+    # Prazo medio geral
+    prazo_medio = 0
+    if len(df_recebidos) > 0 and 'DIAS_PARA_RECEBER' in df_recebidos.columns:
+        prazo = df_recebidos['DIAS_PARA_RECEBER'].dropna()
+        if len(prazo) > 0:
+            prazo_medio = prazo.mean()
 
-    ticket_medio = total_valor / df_cat['Qtd'].sum() if df_cat['Qtd'].sum() > 0 else 0
+    # Categorias com vencido
+    cat_com_vencido = df_vencidos['DESCRICAO'].nunique() if len(df_vencidos) > 0 else 0
 
     col1, col2, col3, col4, col5 = st.columns(5)
 
@@ -408,7 +143,7 @@ def _render_kpis_categorias(df_cat, df, cores):
         st.metric(
             label="Total Categorias",
             value=formatar_numero(total_categorias),
-            delta=f"{formatar_numero(df_cat['Qtd'].sum())} títulos",
+            delta=f"{formatar_numero(df_cat['Qtd'].sum())} titulos",
             delta_color="off"
         )
 
@@ -416,31 +151,32 @@ def _render_kpis_categorias(df_cat, df, cores):
         st.metric(
             label="Valor Total",
             value=formatar_moeda(total_valor),
-            delta=f"Pendente: {formatar_moeda(total_pendente)}",
+            delta=f"Vencido: {formatar_moeda(total_vencido)}",
             delta_color="off"
         )
 
     with col3:
         st.metric(
-            label="Maior Categoria",
-            value=top_cat[:18] + "..." if len(top_cat) > 18 else top_cat,
-            delta=f"{pct_top:.1f}% do total",
+            label="Taxa Pontualidade",
+            value=f"{taxa_pontual:.1f}%",
+            delta="recebidos no prazo",
             delta_color="off"
         )
 
     with col4:
         st.metric(
-            label="Concentração 80%",
-            value=f"{cat_80} categorias",
-            delta=f"{cat_80/total_categorias*100:.1f}% do total",
+            label="Prazo Medio Receb",
+            value=f"{prazo_medio:.0f} dias",
+            delta="emissao ate recebimento",
             delta_color="off"
         )
 
     with col5:
+        pct = (cat_com_vencido / total_categorias * 100) if total_categorias > 0 else 0
         st.metric(
-            label="Ticket Médio",
-            value=formatar_moeda(ticket_medio),
-            delta="Por título",
+            label="Cat. com Vencido",
+            value=formatar_numero(cat_com_vencido),
+            delta=f"{pct:.0f}% do total",
             delta_color="off"
         )
 
@@ -448,36 +184,392 @@ def _render_kpis_categorias(df_cat, df, cores):
 def _render_treemap(df_cat, cores):
     """Treemap de categorias"""
 
-    st.markdown("##### Treemap - Distribuição")
+    st.markdown("##### Treemap - Distribuicao")
 
     df_tree = df_cat.head(15).copy()
 
-    if len(df_tree) > 0:
-        fig = px.treemap(
-            df_tree,
-            path=['Categoria'],
-            values='Total',
-            color='Pct_Recebido',
-            color_continuous_scale='RdYlGn',
-            hover_data={'Total': ':,.2f', 'Pendente': ':,.2f', 'Pct_Recebido': ':.1f'}
+    if len(df_tree) == 0:
+        st.info("Sem dados")
+        return
+
+    fig = px.treemap(
+        df_tree,
+        path=['Categoria'],
+        values='Total',
+        color='Pct_Recebido',
+        color_continuous_scale='RdYlGn',
+        hover_data={'Total': ':,.2f', 'Pendente': ':,.2f', 'Pct_Recebido': ':.1f'}
+    )
+
+    fig.update_layout(
+        criar_layout(300),
+        coloraxis_colorbar=dict(title="% Recebido", len=0.6),
+        margin=dict(l=10, r=10, t=10, b=10)
+    )
+
+    fig.update_traces(
+        textinfo='label+value',
+        texttemplate='%{label}<br>R$ %{value:,.0f}',
+        textfont=dict(size=11)
+    )
+
+    st.plotly_chart(fig, use_container_width=True)
+
+
+def _render_evolucao_mensal(df, cores):
+    """Evolucao mensal das Top 5 categorias"""
+
+    st.markdown("##### Evolucao Mensal - Top 5 Categorias")
+
+    # Identificar top 5 categorias por valor total
+    top5 = df.groupby('DESCRICAO')['VALOR_ORIGINAL'].sum().nlargest(5).index.tolist()
+
+    if len(top5) == 0:
+        st.info("Dados insuficientes")
+        return
+
+    # Filtrar e agrupar por mes
+    df_top = df[df['DESCRICAO'].isin(top5)].copy()
+    df_top['MES'] = df_top['EMISSAO'].dt.to_period('M').astype(str)
+
+    df_pivot = df_top.pivot_table(
+        values='VALOR_ORIGINAL',
+        index='MES',
+        columns='DESCRICAO',
+        aggfunc='sum',
+        fill_value=0
+    ).reset_index()
+
+    if len(df_pivot) < 2:
+        st.info("Historico insuficiente")
+        return
+
+    fig = go.Figure()
+
+    cores_linha = [cores['primaria'], cores['sucesso'], cores['alerta'], cores['info'], cores['perigo']]
+
+    for i, cat in enumerate(top5):
+        if cat in df_pivot.columns:
+            fig.add_trace(go.Scatter(
+                x=df_pivot['MES'],
+                y=df_pivot[cat],
+                name=cat[:20],
+                mode='lines+markers',
+                line=dict(color=cores_linha[i % len(cores_linha)], width=2),
+                marker=dict(size=6)
+            ))
+
+    fig.update_layout(
+        criar_layout(300),
+        margin=dict(l=10, r=10, t=10, b=40),
+        xaxis=dict(tickangle=-45, tickfont=dict(size=9, color=cores['texto'])),
+        yaxis=dict(showticklabels=False, showgrid=True, gridcolor=cores['borda']),
+        legend=dict(
+            orientation='h',
+            yanchor='bottom',
+            y=1.02,
+            xanchor='right',
+            x=1,
+            font=dict(size=9, color=cores['texto'])
+        ),
+        hovermode='x unified'
+    )
+
+    st.plotly_chart(fig, use_container_width=True)
+
+
+def _render_pareto_abc(df_cat, cores):
+    """Analise Pareto / Curva ABC de categorias"""
+
+    st.markdown("##### Analise ABC - Concentracao de Receitas")
+
+    if len(df_cat) == 0:
+        st.info("Sem dados")
+        return
+
+    df_pareto = df_cat[['Categoria', 'Total', 'Pendente', 'Qtd', 'Clientes']].copy()
+    df_pareto = df_pareto.sort_values('Total', ascending=False).reset_index(drop=True)
+
+    total_geral = df_pareto['Total'].sum()
+    if total_geral == 0:
+        st.info("Sem valores para analise")
+        return
+
+    df_pareto['Pct'] = df_pareto['Total'] / total_geral * 100
+    df_pareto['Acumulado'] = df_pareto['Pct'].cumsum()
+
+    # Classificacao ABC
+    df_pareto['Classe'] = df_pareto['Acumulado'].apply(
+        lambda x: 'A' if x <= 80 else ('B' if x <= 95 else 'C')
+    )
+    # A primeira categoria que cruza o limiar fica na classe anterior
+    for i in range(len(df_pareto)):
+        if i == 0:
+            df_pareto.loc[i, 'Classe'] = 'A'
+        elif df_pareto.loc[i - 1, 'Acumulado'] < 80:
+            df_pareto.loc[i, 'Classe'] = 'A'
+        elif df_pareto.loc[i - 1, 'Acumulado'] < 95:
+            df_pareto.loc[i, 'Classe'] = 'B'
+        else:
+            df_pareto.loc[i, 'Classe'] = 'C'
+
+    qtd_a = len(df_pareto[df_pareto['Classe'] == 'A'])
+    qtd_b = len(df_pareto[df_pareto['Classe'] == 'B'])
+    qtd_c = len(df_pareto[df_pareto['Classe'] == 'C'])
+    val_a = df_pareto[df_pareto['Classe'] == 'A']['Total'].sum()
+    val_b = df_pareto[df_pareto['Classe'] == 'B']['Total'].sum()
+    val_c = df_pareto[df_pareto['Classe'] == 'C']['Total'].sum()
+
+    # Cards ABC
+    st.markdown(f"""
+    <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.75rem; margin-bottom: 1rem;">
+        <div style="background: {cores['perigo']}15; border: 1px solid {cores['perigo']}50;
+                    border-radius: 10px; padding: 1rem; text-align: center;">
+            <p style="color: {cores['perigo']}; font-size: 1.4rem; font-weight: 700; margin: 0;">Classe A</p>
+            <p style="color: {cores['texto']}; font-size: 1.1rem; font-weight: 600; margin: 0.25rem 0;">
+                {qtd_a} categorias</p>
+            <p style="color: {cores['texto_secundario']}; font-size: 0.8rem; margin: 0;">
+                {formatar_moeda(val_a)} ({val_a/total_geral*100:.0f}% do total)</p>
+        </div>
+        <div style="background: {cores['alerta']}15; border: 1px solid {cores['alerta']}50;
+                    border-radius: 10px; padding: 1rem; text-align: center;">
+            <p style="color: {cores['alerta']}; font-size: 1.4rem; font-weight: 700; margin: 0;">Classe B</p>
+            <p style="color: {cores['texto']}; font-size: 1.1rem; font-weight: 600; margin: 0.25rem 0;">
+                {qtd_b} categorias</p>
+            <p style="color: {cores['texto_secundario']}; font-size: 0.8rem; margin: 0;">
+                {formatar_moeda(val_b)} ({val_b/total_geral*100:.0f}% do total)</p>
+        </div>
+        <div style="background: {cores['sucesso']}15; border: 1px solid {cores['sucesso']}50;
+                    border-radius: 10px; padding: 1rem; text-align: center;">
+            <p style="color: {cores['sucesso']}; font-size: 1.4rem; font-weight: 700; margin: 0;">Classe C</p>
+            <p style="color: {cores['texto']}; font-size: 1.1rem; font-weight: 600; margin: 0.25rem 0;">
+                {qtd_c} categorias</p>
+            <p style="color: {cores['texto_secundario']}; font-size: 0.8rem; margin: 0;">
+                {formatar_moeda(val_c)} ({val_c/total_geral*100:.0f}% do total)</p>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    # Grafico - barras horizontais por classe
+    df_plot = df_pareto.head(15).copy()
+    df_plot = df_plot.sort_values('Total', ascending=True)
+
+    cor_classe = {'A': cores['perigo'], 'B': cores['alerta'], 'C': cores['sucesso']}
+    bar_colors = [cor_classe[c] for c in df_plot['Classe']]
+
+    fig = go.Figure(go.Bar(
+        y=df_plot['Categoria'].str[:25],
+        x=df_plot['Total'],
+        orientation='h',
+        marker_color=bar_colors,
+        text=[f"{formatar_moeda(v)}  ({p:.1f}%) [{c}]"
+              for v, p, c in zip(df_plot['Total'], df_plot['Pct'], df_plot['Classe'])],
+        textposition='outside',
+        textfont=dict(size=9, color=cores['texto']),
+        hovertemplate='<b>%{y}</b><br>Valor: R$ %{x:,.0f}<extra></extra>'
+    ))
+
+    fig.update_layout(
+        criar_layout(380),
+        xaxis=dict(showticklabels=False, showgrid=False),
+        yaxis=dict(tickfont=dict(size=9, color=cores['texto'])),
+        margin=dict(l=10, r=120, t=10, b=10)
+    )
+
+    st.plotly_chart(fig, use_container_width=True)
+
+    # Tabela resumo ABC
+    with st.expander("Ver detalhes da classificacao ABC"):
+        df_abc = df_pareto[['Categoria', 'Total', 'Pct', 'Acumulado', 'Classe', 'Qtd', 'Clientes']].copy()
+        df_abc['Total'] = df_abc['Total'].apply(formatar_moeda)
+        df_abc['Pct'] = df_abc['Pct'].apply(lambda x: f"{x:.1f}%")
+        df_abc['Acumulado'] = df_abc['Acumulado'].apply(lambda x: f"{x:.1f}%")
+        df_abc.columns = ['Categoria', 'Valor', '% Individual', '% Acumulado', 'Classe', 'Titulos', 'Clientes']
+        st.dataframe(df_abc, use_container_width=True, hide_index=True, height=400)
+
+
+def _render_sazonalidade(df, cores):
+    """Analise de sazonalidade por categoria"""
+
+    st.markdown("##### Sazonalidade - Padrao Mensal")
+
+    # Top 6 categorias
+    top6 = df.groupby('DESCRICAO')['VALOR_ORIGINAL'].sum().nlargest(6).index.tolist()
+
+    if len(top6) == 0:
+        st.info("Dados insuficientes")
+        return
+
+    col1, col2 = st.columns([1, 3])
+
+    with col1:
+        categoria_sel = st.selectbox(
+            "Categoria",
+            options=top6,
+            key='sazon_cat_rec'
         )
+
+    df_cat = df[df['DESCRICAO'] == categoria_sel].copy()
+    df_cat['MES_NUM'] = df_cat['EMISSAO'].dt.month
+
+    # Agrupar por mes do ano (media historica)
+    df_sazon = df_cat.groupby('MES_NUM')['VALOR_ORIGINAL'].mean().reset_index()
+    df_sazon['MES_NOME'] = df_sazon['MES_NUM'].map({
+        1: 'Jan', 2: 'Fev', 3: 'Mar', 4: 'Abr', 5: 'Mai', 6: 'Jun',
+        7: 'Jul', 8: 'Ago', 9: 'Set', 10: 'Out', 11: 'Nov', 12: 'Dez'
+    })
+
+    with col2:
+        if len(df_sazon) < 3:
+            st.info("Historico insuficiente para analise de sazonalidade")
+            return
+
+        # Identificar meses de pico e baixa
+        media_geral = df_sazon['VALOR_ORIGINAL'].mean()
+        df_sazon['DESVIO'] = ((df_sazon['VALOR_ORIGINAL'] - media_geral) / media_geral * 100)
+
+        # Cores baseadas no desvio
+        def cor_sazon(desvio):
+            if desvio > 20:
+                return cores['perigo']
+            elif desvio > 10:
+                return cores['alerta']
+            elif desvio < -20:
+                return cores['info']
+            elif desvio < -10:
+                return cores['sucesso']
+            return cores['texto_secundario']
+
+        bar_colors = [cor_sazon(d) for d in df_sazon['DESVIO']]
+
+        fig = go.Figure()
+
+        fig.add_trace(go.Bar(
+            x=df_sazon['MES_NOME'],
+            y=df_sazon['VALOR_ORIGINAL'],
+            marker_color=bar_colors,
+            text=[f"{d:+.0f}%" for d in df_sazon['DESVIO']],
+            textposition='outside',
+            textfont=dict(size=9, color=cores['texto'])
+        ))
+
+        # Linha de media
+        fig.add_hline(
+            y=media_geral,
+            line_dash="dash",
+            line_color=cores['texto'],
+            line_width=1,
+            annotation_text="Media",
+            annotation_position="right"
+        )
+
         fig.update_layout(
-            criar_layout(300),
-            coloraxis_colorbar=dict(title="% Recebido", len=0.6),
-            margin=dict(l=10, r=10, t=10, b=10)
+            criar_layout(250),
+            margin=dict(l=10, r=10, t=10, b=10),
+            xaxis=dict(tickfont=dict(size=10, color=cores['texto'])),
+            yaxis=dict(showticklabels=False, showgrid=False)
         )
-        fig.update_traces(
-            textinfo='label+value',
-            texttemplate='%{label}<br>R$ %{value:,.0f}',
-            textfont=dict(size=11)
-        )
+
         st.plotly_chart(fig, use_container_width=True)
+
+        # Insights
+        meses_pico = df_sazon[df_sazon['DESVIO'] > 15]['MES_NOME'].tolist()
+        meses_baixa = df_sazon[df_sazon['DESVIO'] < -15]['MES_NOME'].tolist()
+
+        col_a, col_b = st.columns(2)
+        if meses_pico:
+            col_a.caption(f"Picos: {', '.join(meses_pico)}")
+        if meses_baixa:
+            col_b.caption(f"Baixas: {', '.join(meses_baixa)}")
+
+
+def _get_nome_grupo_cat(cod_filial):
+    grupo_id = get_grupo_filial(int(cod_filial))
+    return GRUPOS_FILIAIS.get(grupo_id, f"Grupo {grupo_id}")
+
+def _detectar_multiplos_grupos_cat(df):
+    if 'FILIAL' not in df.columns or len(df) == 0:
+        return False
+    grupos = df['FILIAL'].dropna().apply(lambda x: get_grupo_filial(int(x))).nunique()
+    return grupos > 1
+
+
+def _render_matriz_filial_categoria(df, cores):
+    """Matriz Filial x Categoria (Heatmap)"""
+
+    multiplos = _detectar_multiplos_grupos_cat(df)
+
+    # Top 10 categorias
+    top10_cat = df.groupby('DESCRICAO')['VALOR_ORIGINAL'].sum().nlargest(10).index.tolist()
+
+    if len(top10_cat) == 0 or 'NOME_FILIAL' not in df.columns:
+        st.info("Dados insuficientes")
+        return
+
+    # Filtrar e criar pivot
+    df_matriz = df[df['DESCRICAO'].isin(top10_cat)].copy()
+
+    if multiplos:
+        st.markdown("##### Matriz Grupo x Categoria")
+        df_matriz['GRUPO'] = df_matriz['FILIAL'].apply(lambda x: _get_nome_grupo_cat(x))
+        pivot = df_matriz.pivot_table(
+            values='VALOR_ORIGINAL',
+            index='GRUPO',
+            columns='DESCRICAO',
+            aggfunc='sum',
+            fill_value=0
+        )
     else:
-        st.info("Sem dados para exibir treemap.")
+        st.markdown("##### Matriz Filial x Categoria")
+        df_matriz['FILIAL_LABEL'] = df_matriz['FILIAL'].astype(int).astype(str) + ' - ' + df_matriz['NOME_FILIAL'].str.split(' - ').str[-1].str.strip()
+        pivot = df_matriz.pivot_table(
+            values='VALOR_ORIGINAL',
+            index='FILIAL_LABEL',
+            columns='DESCRICAO',
+            aggfunc='sum',
+            fill_value=0
+        )
+
+    if pivot.empty:
+        st.info("Dados insuficientes para matriz")
+        return
+
+    # Heatmap
+    fig = go.Figure(data=go.Heatmap(
+        z=pivot.values,
+        x=[f[:18] for f in pivot.columns],
+        y=[f[:25] for f in pivot.index],
+        colorscale=[
+            [0, cores['fundo']],
+            [0.5, cores['info']],
+            [1, cores['primaria']]
+        ],
+        hovertemplate='Filial: %{y}<br>Categoria: %{x}<br>Valor: R$ %{z:,.0f}<extra></extra>'
+    ))
+
+    fig.update_layout(
+        criar_layout(400),
+        margin=dict(l=10, r=10, t=10, b=80),
+        xaxis=dict(tickangle=-45, tickfont=dict(size=8, color=cores['texto'])),
+        yaxis=dict(tickfont=dict(size=9, color=cores['texto']))
+    )
+
+    st.plotly_chart(fig, use_container_width=True)
+
+    # Insights
+    with st.expander("Ver insights da matriz"):
+        for cat in top10_cat[:5]:
+            if cat in pivot.columns:
+                total_cat = pivot[cat].sum()
+                if total_cat > 0:
+                    max_filial = pivot[cat].idxmax()
+                    pct_max = pivot[cat].max() / total_cat * 100
+                    if pct_max > 60:
+                        st.caption(f"**{cat[:25]}**: {pct_max:.0f}% concentrado em {max_filial}")
 
 
-def _render_donut_categorias(df_cat, cores):
-    """Donut chart das top 8 categorias"""
+def _render_donut(df_cat, cores):
+    """Donut das top 8 categorias"""
 
     st.markdown("##### Top 8 Categorias")
 
@@ -487,532 +579,413 @@ def _render_donut_categorias(df_cat, cores):
     if outros > 0:
         df_top = pd.concat([df_top, pd.DataFrame([{
             'Categoria': 'Outros',
-            'Total': outros,
-            'Pendente': df_cat.iloc[8:]['Pendente'].sum(),
-            'Recebido': df_cat.iloc[8:]['Recebido'].sum(),
-            'Pct_Recebido': 0
+            'Total': outros
         }])], ignore_index=True)
 
-    if len(df_top) > 0:
-        fig = go.Figure(go.Pie(
-            labels=df_top['Categoria'].str[:20],
-            values=df_top['Total'],
-            hole=0.5,
-            textinfo='percent',
-            textfont=dict(size=10),
-            hovertemplate='<b>%{label}</b><br>R$ %{value:,.2f}<br>%{percent}<extra></extra>'
-        ))
+    if len(df_top) == 0:
+        st.info("Sem dados")
+        return
 
-        total = df_cat['Total'].sum()
-        fig.add_annotation(
-            text=f"<b>{formatar_moeda(total)}</b>",
-            x=0.5, y=0.5,
-            font=dict(size=14, color=cores['texto']),
-            showarrow=False
-        )
+    fig = go.Figure(go.Pie(
+        labels=df_top['Categoria'].str[:20],
+        values=df_top['Total'],
+        hole=0.5,
+        textinfo='percent',
+        textfont=dict(size=10),
+        hovertemplate='<b>%{label}</b><br>R$ %{value:,.2f}<br>%{percent}<extra></extra>'
+    ))
 
-        fig.update_layout(
-            criar_layout(300),
-            showlegend=True,
-            legend=dict(
-                orientation="v",
-                yanchor="middle",
-                y=0.5,
-                xanchor="left",
-                x=1.02,
-                font=dict(size=9)
-            ),
-            margin=dict(l=10, r=100, t=10, b=10)
-        )
-        st.plotly_chart(fig, use_container_width=True)
-    else:
-        st.info("Sem dados para exibir gráfico.")
+    total = df_cat['Total'].sum()
+    fig.add_annotation(
+        text=f"<b>{formatar_moeda(total)}</b>",
+        x=0.5, y=0.5,
+        font=dict(size=14, color=cores['texto']),
+        showarrow=False
+    )
+
+    fig.update_layout(
+        criar_layout(300),
+        showlegend=True,
+        legend=dict(orientation="v", yanchor="middle", y=0.5, xanchor="left", x=1.02, font=dict(size=9)),
+        margin=dict(l=10, r=100, t=10, b=10)
+    )
+
+    st.plotly_chart(fig, use_container_width=True)
+
+
+def _render_prazo_por_categoria(df_recebidos, cores):
+    """Prazo medio por categoria"""
+
+    st.markdown("##### Prazo Medio por Categoria")
+
+    if len(df_recebidos) == 0 or 'DIAS_PARA_RECEBER' not in df_recebidos.columns:
+        st.info("Sem dados de recebimento")
+        return
+
+    df_prazo = df_recebidos.groupby('DESCRICAO').agg({
+        'DIAS_PARA_RECEBER': 'mean',
+        'VALOR_ORIGINAL': 'sum'
+    }).reset_index()
+    df_prazo.columns = ['Categoria', 'Prazo', 'Valor']
+    df_prazo = df_prazo.dropna(subset=['Prazo'])
+
+    # Top 10 com maior prazo
+    df_top = df_prazo.nlargest(10, 'Prazo')
+
+    def cor_prazo(p):
+        if p <= 30:
+            return cores['sucesso']
+        elif p <= 45:
+            return cores['info']
+        elif p <= 60:
+            return cores['alerta']
+        return cores['perigo']
+
+    bar_colors = [cor_prazo(p) for p in df_top['Prazo']]
+
+    fig = go.Figure(go.Bar(
+        y=df_top['Categoria'].str[:25],
+        x=df_top['Prazo'],
+        orientation='h',
+        marker_color=bar_colors,
+        text=[f"{p:.0f}d" for p in df_top['Prazo']],
+        textposition='outside',
+        textfont=dict(size=10)
+    ))
+
+    fig.update_layout(
+        criar_layout(300),
+        yaxis={'autorange': 'reversed'},
+        margin=dict(l=10, r=50, t=10, b=10),
+        xaxis_title='Dias'
+    )
+
+    st.plotly_chart(fig, use_container_width=True)
+    st.caption("Categorias com maior prazo de recebimento")
 
 
 def _render_top_categorias(df_cat, cores):
-    """Top 10 categorias - barras horizontais"""
-
-    st.markdown("##### Top 10 - Recebido vs Pendente")
+    """Top 10 categorias - Recebido e Pendente em graficos separados"""
 
     df_top = df_cat.head(10)
 
-    if len(df_top) > 0:
-        fig = go.Figure()
+    if len(df_top) == 0:
+        st.info("Sem dados")
+        return
 
-        fig.add_trace(go.Bar(
+    col1, col2 = st.columns(2)
+
+    with col1:
+        st.markdown("##### Top 10 - Recebido")
+        fig = go.Figure(go.Bar(
             y=df_top['Categoria'].str[:25],
             x=df_top['Recebido'],
             orientation='h',
-            name='Recebido',
             marker_color=cores['sucesso'],
             text=[formatar_moeda(v) for v in df_top['Recebido']],
-            textposition='inside',
-            textfont=dict(size=9, color='white')
+            textposition='outside',
+            textfont=dict(size=9)
         ))
+        fig.update_layout(
+            criar_layout(300),
+            yaxis={'autorange': 'reversed'},
+            xaxis=dict(showticklabels=False, showgrid=False),
+            margin=dict(l=10, r=10, t=10, b=10)
+        )
+        st.plotly_chart(fig, use_container_width=True)
 
-        fig.add_trace(go.Bar(
+    with col2:
+        st.markdown("##### Top 10 - Pendente")
+        fig = go.Figure(go.Bar(
             y=df_top['Categoria'].str[:25],
             x=df_top['Pendente'],
             orientation='h',
-            name='Pendente',
             marker_color=cores['alerta'],
             text=[formatar_moeda(v) for v in df_top['Pendente']],
-            textposition='inside',
-            textfont=dict(size=9, color='white')
+            textposition='outside',
+            textfont=dict(size=9)
         ))
-
-        fig.update_layout(
-            criar_layout(300, barmode='stack'),
-            yaxis={'autorange': 'reversed'},
-            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-            margin=dict(l=10, r=10, t=30, b=10)
-        )
-        st.plotly_chart(fig, use_container_width=True)
-    else:
-        st.info("Sem dados para exibir gráfico.")
-
-
-def _render_aging_por_categoria(df, cores):
-    """Aging por categoria - mostra quanto está vencido vs a vencer por categoria"""
-
-    st.markdown("##### Situação de Vencimento por Categoria")
-    st.caption("Quanto de cada categoria está vencido vs a vencer")
-
-    df_pendentes = df[df['SALDO'] > 0].copy()
-
-    if len(df_pendentes) == 0:
-        st.info("Sem títulos pendentes")
-        return
-
-    # Classificar: Vencido vs A Vencer
-    df_pendentes['SITUACAO'] = df_pendentes['STATUS'].apply(
-        lambda x: 'Vencido' if x == 'Vencido' else 'A Vencer'
-    )
-
-    # Agrupar por categoria
-    df_cat = df_pendentes.groupby('DESCRICAO').agg({
-        'SALDO': 'sum',
-        'VALOR_ORIGINAL': 'count'
-    }).reset_index()
-    df_cat.columns = ['Categoria', 'Saldo_Total', 'Qtd']
-
-    # Calcular vencido por categoria
-    df_vencido = df_pendentes[df_pendentes['SITUACAO'] == 'Vencido'].groupby('DESCRICAO')['SALDO'].sum().reset_index()
-    df_vencido.columns = ['Categoria', 'Vencido']
-
-    # Merge
-    df_cat = df_cat.merge(df_vencido, on='Categoria', how='left')
-    df_cat['Vencido'] = df_cat['Vencido'].fillna(0)
-    df_cat['A_Vencer'] = df_cat['Saldo_Total'] - df_cat['Vencido']
-    df_cat['Pct_Vencido'] = (df_cat['Vencido'] / df_cat['Saldo_Total'] * 100).round(1)
-
-    # Top 10 por saldo
-    df_cat = df_cat.sort_values('Saldo_Total', ascending=False).head(10)
-
-    # Gráfico de barras empilhadas (horizontal)
-    fig = go.Figure()
-
-    # Barra "A Vencer" (verde)
-    fig.add_trace(go.Bar(
-        y=df_cat['Categoria'].str[:22],
-        x=df_cat['A_Vencer'],
-        orientation='h',
-        name='A Vencer',
-        marker_color=cores['sucesso'],
-        text=[formatar_moeda(v) for v in df_cat['A_Vencer']],
-        textposition='inside',
-        textfont=dict(size=8, color='white'),
-        hovertemplate="<b>%{y}</b><br>A Vencer: R$ %{x:,.2f}<extra></extra>"
-    ))
-
-    # Barra "Vencido" (vermelho)
-    fig.add_trace(go.Bar(
-        y=df_cat['Categoria'].str[:22],
-        x=df_cat['Vencido'],
-        orientation='h',
-        name='Vencido',
-        marker_color=cores['perigo'],
-        text=[f"{formatar_moeda(v)} ({p:.0f}%)" if v > 0 else '' for v, p in zip(df_cat['Vencido'], df_cat['Pct_Vencido'])],
-        textposition='inside',
-        textfont=dict(size=8, color='white'),
-        hovertemplate="<b>%{y}</b><br>Vencido: R$ %{x:,.2f}<extra></extra>"
-    ))
-
-    fig.update_layout(
-        criar_layout(320, barmode='stack'),
-        yaxis={'autorange': 'reversed'},
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1, font=dict(size=10)),
-        margin=dict(l=10, r=10, t=40, b=10)
-    )
-
-    st.plotly_chart(fig, use_container_width=True)
-
-    # Resumo
-    total_vencido = df_cat['Vencido'].sum()
-    total_a_vencer = df_cat['A_Vencer'].sum()
-    pct_vencido_geral = (total_vencido / (total_vencido + total_a_vencer) * 100) if (total_vencido + total_a_vencer) > 0 else 0
-
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        st.metric("A Vencer", formatar_moeda(total_a_vencer))
-    with col2:
-        st.metric("Vencido", formatar_moeda(total_vencido))
-    with col3:
-        st.metric("% Vencido", f"{pct_vencido_geral:.1f}%")
-
-
-def _render_categorias_criticas(df, cores):
-    """Categorias críticas - alto valor vencido"""
-
-    st.markdown("##### Categorias Críticas")
-
-    df_pendentes = df[df['SALDO'] > 0].copy()
-
-    if len(df_pendentes) == 0:
-        st.info("Sem titulos pendentes")
-        return
-
-    # Filtrar vencidos
-    df_vencido = df_pendentes[df_pendentes['DIAS_ATRASO'] > 0]
-
-    if len(df_vencido) == 0:
-        st.success("Nenhuma categoria com titulos vencidos!")
-        return
-
-    # Agrupar por categoria
-    df_crit = df_vencido.groupby('DESCRICAO').agg({
-        'SALDO': 'sum',
-        'DIAS_ATRASO': 'max',
-        'NOME_CLIENTE': 'nunique'
-    }).reset_index()
-    df_crit.columns = ['Categoria', 'Vencido', 'Dias_Max', 'Clientes']
-
-    # Score de risco
-    df_crit['SCORE'] = df_crit['Vencido'] * (1 + df_crit['Dias_Max'] / 30)
-    df_crit = df_crit.nlargest(10, 'SCORE')
-
-    fig = go.Figure()
-
-    fig.add_trace(go.Bar(
-        y=df_crit['Categoria'].str[:22],
-        x=df_crit['Vencido'],
-        orientation='h',
-        marker_color=cores['perigo'],
-        text=[f"{formatar_moeda(v)} | {int(d)}d | {c} cli" for v, d, c in zip(df_crit['Vencido'], df_crit['Dias_Max'], df_crit['Clientes'])],
-        textposition='outside',
-        textfont=dict(size=8)
-    ))
-
-    fig.update_layout(
-        criar_layout(320),
-        yaxis={'autorange': 'reversed'},
-        margin=dict(l=10, r=120, t=10, b=10)
-    )
-
-    st.plotly_chart(fig, use_container_width=True)
-
-    total_critico = df_crit['Vencido'].sum()
-    st.error(f"**Total Vencido:** {formatar_moeda(total_critico)}")
-
-
-def _get_nome_grupo(cod_filial):
-    """Retorna o nome do grupo a partir do codigo da filial"""
-    grupo_id = get_grupo_filial(int(cod_filial))
-    return GRUPOS_FILIAIS.get(grupo_id, f"Grupo {grupo_id}")
-
-
-def _detectar_multiplos_grupos(df):
-    """Detecta se o dataframe contem filiais de multiplos grupos"""
-    if 'FILIAL' not in df.columns or len(df) == 0:
-        return False
-    grupos = df['FILIAL'].dropna().apply(lambda x: get_grupo_filial(int(x))).nunique()
-    return grupos > 1
-
-
-def _get_label_filial(row):
-    """Retorna label curta da filial: codigo + sufixo do nome"""
-    cod = str(int(row['FILIAL'])) if pd.notna(row.get('FILIAL')) else ''
-    nome = str(row.get('NOME_FILIAL', ''))
-    partes = nome.split(' - ')
-    sufixo = partes[-1].strip() if len(partes) > 1 else nome.strip()
-    return f"{cod} - {sufixo}" if cod else sufixo
-
-
-def _render_heatmap_categoria_filial(df, cores):
-    """Heatmap de valores por categoria x filial/grupo"""
-
-    if 'NOME_FILIAL' not in df.columns:
-        st.info("Coluna NOME_FILIAL nao disponivel")
-        return
-
-    multiplos_grupos = _detectar_multiplos_grupos(df)
-
-    # Top 8 categorias
-    top_cats = df.groupby('DESCRICAO')['VALOR_ORIGINAL'].sum().nlargest(8).index.tolist()
-    df_heat = df[df['DESCRICAO'].isin(top_cats)].copy()
-
-    if multiplos_grupos:
-        st.markdown("##### Categoria x Grupo")
-        df_heat['GRUPO'] = df_heat['FILIAL'].apply(lambda x: _get_nome_grupo(x))
-        col_agrup = 'GRUPO'
-    else:
-        st.markdown("##### Categoria x Filial")
-        df_heat['FILIAL_LABEL'] = df_heat.apply(_get_label_filial, axis=1)
-        col_agrup = 'FILIAL_LABEL'
-
-    # Pivot
-    df_pivot = df_heat.groupby(['DESCRICAO', col_agrup])['VALOR_ORIGINAL'].sum().unstack(fill_value=0)
-
-    if len(df_pivot) == 0 or len(df_pivot.columns) == 0:
-        st.info("Dados insuficientes para heatmap")
-        return
-
-    fig = go.Figure(data=go.Heatmap(
-        z=df_pivot.values,
-        x=[str(c)[:20] for c in df_pivot.columns],
-        y=df_pivot.index.str[:20],
-        colorscale=[
-            [0, cores['card']],
-            [0.5, cores['primaria']],
-            [1, cores['sucesso']]
-        ],
-        text=[[formatar_moeda(v) for v in row] for row in df_pivot.values],
-        texttemplate="%{text}",
-        textfont=dict(size=8),
-        hovertemplate="Categoria: %{y}<br>" + ("Grupo" if multiplos_grupos else "Filial") + ": %{x}<br>Valor: %{text}<extra></extra>"
-    ))
-
-    fig.update_layout(
-        criar_layout(320),
-        margin=dict(l=10, r=10, t=10, b=60),
-        xaxis_tickangle=-45
-    )
-
-    st.plotly_chart(fig, use_container_width=True)
-
-
-def _render_sazonalidade_categorias(df, cores):
-    """Sazonalidade - padrão mensal por categoria"""
-
-    st.markdown("##### Sazonalidade (Mês do Ano)")
-
-    # Top 5 categorias
-    top_cats = df.groupby('DESCRICAO')['VALOR_ORIGINAL'].sum().nlargest(5).index.tolist()
-    df_saz = df[df['DESCRICAO'].isin(top_cats)].copy()
-
-    df_saz['MES_NUM'] = df_saz['EMISSAO'].dt.month
-    df_saz['MES_NOME'] = df_saz['EMISSAO'].dt.strftime('%b')
-
-    # Agrupar por mês e categoria
-    df_pivot = df_saz.groupby(['MES_NUM', 'MES_NOME', 'DESCRICAO'])['VALOR_ORIGINAL'].sum().reset_index()
-
-    if len(df_pivot) == 0:
-        st.info("Dados insuficientes")
-        return
-
-    # Ordenar por mês
-    df_pivot = df_pivot.sort_values('MES_NUM')
-
-    fig = px.bar(
-        df_pivot,
-        x='MES_NOME',
-        y='VALOR_ORIGINAL',
-        color='DESCRICAO',
-        barmode='group',
-        labels={'VALOR_ORIGINAL': 'Valor (R$)', 'MES_NOME': 'Mês', 'DESCRICAO': 'Categoria'}
-    )
-
-    fig.update_layout(
-        criar_layout(320),
-        legend=dict(
-            orientation="h",
-            yanchor="bottom",
-            y=-0.4,
-            xanchor="center",
-            x=0.5,
-            font=dict(size=7)
-        ),
-        margin=dict(l=10, r=10, t=10, b=90),
-        xaxis={'categoryorder': 'array', 'categoryarray': ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez']}
-    )
-
-    st.plotly_chart(fig, use_container_width=True)
-
-
-def _render_evolucao_categorias(df, cores):
-    """Evolução mensal das top 5 categorias"""
-
-    st.markdown("##### Evolução Mensal - Top 5")
-
-    top5 = df.groupby('DESCRICAO')['VALOR_ORIGINAL'].sum().nlargest(5).index.tolist()
-
-    df_top5 = df[df['DESCRICAO'].isin(top5)].copy()
-    df_top5['MES'] = df_top5['EMISSAO'].dt.to_period('M').astype(str)
-
-    df_evol = df_top5.groupby(['MES', 'DESCRICAO'])['VALOR_ORIGINAL'].sum().reset_index()
-
-    if len(df_evol) > 0:
-        fig = px.line(
-            df_evol,
-            x='MES',
-            y='VALOR_ORIGINAL',
-            color='DESCRICAO',
-            markers=True,
-            labels={'VALOR_ORIGINAL': 'Valor (R$)', 'MES': 'Mês', 'DESCRICAO': 'Categoria'}
-        )
-
         fig.update_layout(
             criar_layout(300),
-            legend=dict(
-                orientation="h",
-                yanchor="bottom",
-                y=-0.35,
-                xanchor="center",
-                x=0.5,
-                font=dict(size=8)
-            ),
-            margin=dict(l=10, r=10, t=10, b=80),
-            xaxis_tickangle=-45
+            yaxis={'autorange': 'reversed'},
+            xaxis=dict(showticklabels=False, showgrid=False),
+            margin=dict(l=10, r=10, t=10, b=10)
         )
         st.plotly_chart(fig, use_container_width=True)
-    else:
-        st.info("Sem dados suficientes para evolução.")
 
 
-def _render_detalhe_categoria(df, df_cat, cores):
-    """Detalhes de categoria selecionada"""
+def _render_vencidos_por_categoria(df_vencidos, cores):
+    """Vencidos por categoria"""
+
+    st.markdown("##### Vencidos por Categoria")
+
+    if len(df_vencidos) == 0:
+        st.success("Nenhum titulo vencido!")
+        return
+
+    df_venc = df_vencidos.groupby('DESCRICAO').agg({
+        'SALDO': 'sum',
+        'DIAS_ATRASO': 'mean',
+        'VALOR_ORIGINAL': 'count'
+    }).nlargest(10, 'SALDO').reset_index()
+    df_venc.columns = ['Categoria', 'Valor', 'Atraso_Medio', 'Qtd']
+
+    def cor_atraso(d):
+        if d > 30:
+            return cores['perigo']
+        elif d > 15:
+            return '#f97316'
+        return cores['alerta']
+
+    bar_colors = [cor_atraso(d) for d in df_venc['Atraso_Medio']]
+
+    fig = go.Figure(go.Bar(
+        y=df_venc['Categoria'].str[:25],
+        x=df_venc['Valor'],
+        orientation='h',
+        marker_color=bar_colors,
+        text=[f"{formatar_moeda(v)} ({d:.0f}d)" for v, d in zip(df_venc['Valor'], df_venc['Atraso_Medio'])],
+        textposition='outside',
+        textfont=dict(size=9)
+    ))
+
+    fig.update_layout(
+        criar_layout(300),
+        yaxis={'autorange': 'reversed'},
+        margin=dict(l=10, r=80, t=10, b=10)
+    )
+
+    st.plotly_chart(fig, use_container_width=True)
+    st.caption("Cor indica atraso medio (amarelo < 15d, laranja < 30d, vermelho > 30d)")
+
+
+def _render_busca_categoria(df, df_recebidos, df_vencidos, cores):
+    """Busca e detalhes de categoria"""
 
     st.markdown("##### Consultar Categoria")
 
-    categorias = df_cat['Categoria'].tolist()
+    categorias = sorted(df['DESCRICAO'].unique().tolist())
 
-    col1, col2 = st.columns([3, 1])
-    with col1:
-        categoria_selecionada = st.selectbox(
-            "Selecione uma categoria",
-            options=[""] + categorias,
-            key="busca_categoria_rec"
-        )
+    categoria_sel = st.selectbox(
+        "Selecione uma categoria",
+        options=[""] + categorias,
+        key="busca_cat_rec"
+    )
 
-    if categoria_selecionada:
-        df_sel = df[df['DESCRICAO'] == categoria_selecionada]
+    if not categoria_sel:
+        return
 
-        total_valor = df_sel['VALOR_ORIGINAL'].sum()
-        total_recebido = total_valor - df_sel['SALDO'].sum()
-        total_pendente = df_sel['SALDO'].sum()
-        qtd_titulos = len(df_sel)
-        qtd_clientes = df_sel['NOME_CLIENTE'].nunique()
-        pct_recebido = (total_recebido / total_valor * 100) if total_valor > 0 else 0
+    df_sel = df[df['DESCRICAO'] == categoria_sel]
+    df_rec_sel = df_recebidos[df_recebidos['DESCRICAO'] == categoria_sel] if 'DESCRICAO' in df_recebidos.columns else pd.DataFrame()
+    df_venc_sel = df_vencidos[df_vencidos['DESCRICAO'] == categoria_sel] if len(df_vencidos) > 0 else pd.DataFrame()
 
-        col1, col2, col3, col4, col5 = st.columns(5)
+    # Metricas financeiras
+    total_valor = df_sel['VALOR_ORIGINAL'].sum()
+    total_pendente = df_sel['SALDO'].sum()
+    total_recebido = total_valor - total_pendente
+    total_vencido = df_venc_sel['SALDO'].sum() if len(df_venc_sel) > 0 else 0
 
-        with col1:
-            st.metric("Total", formatar_moeda(total_valor), f"{qtd_titulos} títulos", delta_color="off")
-        with col2:
-            st.metric("Recebido", formatar_moeda(total_recebido), f"{pct_recebido:.1f}%", delta_color="off")
-        with col3:
-            st.metric("Pendente", formatar_moeda(total_pendente), delta_color="off")
-        with col4:
-            st.metric("Clientes", qtd_clientes, delta_color="off")
-        with col5:
-            filiais = df_sel['NOME_FILIAL'].nunique()
-            st.metric("Filiais", filiais, delta_color="off")
+    # Metricas de recebimento
+    prazo_medio = 0
+    taxa_pontual = 0
+    if len(df_rec_sel) > 0:
+        if 'DIAS_PARA_RECEBER' in df_rec_sel.columns:
+            prazo = df_rec_sel['DIAS_PARA_RECEBER'].dropna()
+            if len(prazo) > 0:
+                prazo_medio = prazo.mean()
 
-        col1, col2 = st.columns(2)
+        if 'DIAS_ATRASO_RECEB' in df_rec_sel.columns:
+            atraso = df_rec_sel['DIAS_ATRASO_RECEB'].dropna()
+            if len(atraso) > 0:
+                taxa_pontual = (atraso <= 0).sum() / len(atraso) * 100
 
-        with col1:
-            st.markdown("###### Top Clientes")
-            df_cli = df_sel.groupby('NOME_CLIENTE')['VALOR_ORIGINAL'].sum().nlargest(5).reset_index()
+    # Linha 1: Metricas financeiras
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("Valor Total", formatar_moeda(total_valor), f"{len(df_sel)} titulos")
+    col2.metric("Recebido", formatar_moeda(total_recebido))
+    col3.metric("Pendente", formatar_moeda(total_pendente))
+    col4.metric("Vencido", formatar_moeda(total_vencido))
 
-            if len(df_cli) > 0:
-                fig = go.Figure(go.Bar(
-                    y=df_cli['NOME_CLIENTE'].str[:20],
-                    x=df_cli['VALOR_ORIGINAL'],
-                    orientation='h',
-                    marker_color=cores['primaria'],
-                    text=[formatar_moeda(v) for v in df_cli['VALOR_ORIGINAL']],
-                    textposition='outside',
-                    textfont=dict(size=9)
-                ))
-                fig.update_layout(
-                    criar_layout(200),
-                    yaxis={'autorange': 'reversed'},
-                    margin=dict(l=10, r=60, t=10, b=10)
-                )
-                st.plotly_chart(fig, use_container_width=True)
+    # Linha 2: Metricas de comportamento
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("Prazo Medio Receb", f"{prazo_medio:.0f} dias")
+    col2.metric("Taxa Pontualidade", f"{taxa_pontual:.1f}%")
+    col3.metric("Clientes", df_sel['NOME_CLIENTE'].nunique())
+    col4.metric("Filiais", df_sel['NOME_FILIAL'].nunique())
 
-        with col2:
-            st.markdown("###### Distribuição por Filial")
-            df_fil = df_sel.groupby('NOME_FILIAL')['VALOR_ORIGINAL'].sum().reset_index()
+    # Tabs
+    tab1, tab2, tab3 = st.tabs(["Por Cliente", "Por Filial", "Titulos"])
 
-            if len(df_fil) > 0:
-                fig = go.Figure(go.Pie(
-                    labels=df_fil['NOME_FILIAL'].str[:15],
-                    values=df_fil['VALOR_ORIGINAL'],
-                    hole=0.4,
-                    textinfo='percent',
-                    textfont=dict(size=9)
-                ))
-                fig.update_layout(
-                    criar_layout(200),
-                    showlegend=True,
-                    legend=dict(font=dict(size=8)),
-                    margin=dict(l=10, r=10, t=10, b=10)
-                )
-                st.plotly_chart(fig, use_container_width=True)
+    with tab1:
+        df_cli = df_sel.groupby('NOME_CLIENTE').agg({
+            'VALOR_ORIGINAL': 'sum',
+            'SALDO': 'sum'
+        }).nlargest(10, 'VALOR_ORIGINAL').reset_index()
 
-        with st.expander("Ver títulos da categoria"):
-            df_titulos = df_sel[['NOME_FILIAL', 'NOME_CLIENTE', 'EMISSAO', 'VENCIMENTO', 'VALOR_ORIGINAL', 'SALDO', 'STATUS']].copy()
-            df_titulos = df_titulos.sort_values('VALOR_ORIGINAL', ascending=False).head(50)
-            df_titulos['EMISSAO'] = df_titulos['EMISSAO'].dt.strftime('%d/%m/%Y')
-            df_titulos['VENCIMENTO'] = df_titulos['VENCIMENTO'].dt.strftime('%d/%m/%Y')
-            df_titulos['VALOR_ORIGINAL'] = df_titulos['VALOR_ORIGINAL'].apply(lambda x: formatar_moeda(x, completo=True))
-            df_titulos['SALDO'] = df_titulos['SALDO'].apply(lambda x: formatar_moeda(x, completo=True))
-            df_titulos.columns = ['Filial', 'Cliente', 'Emissão', 'Vencimento', 'Valor', 'Saldo', 'Status']
-            st.dataframe(df_titulos, use_container_width=True, hide_index=True, height=300)
+        if len(df_cli) > 0:
+            fig = go.Figure()
+            fig.add_trace(go.Bar(
+                y=df_cli['NOME_CLIENTE'].str[:20],
+                x=df_cli['VALOR_ORIGINAL'] - df_cli['SALDO'],
+                orientation='h',
+                name='Recebido',
+                marker_color=cores['sucesso']
+            ))
+            fig.add_trace(go.Bar(
+                y=df_cli['NOME_CLIENTE'].str[:20],
+                x=df_cli['SALDO'],
+                orientation='h',
+                name='Pendente',
+                marker_color=cores['alerta']
+            ))
+            fig.update_layout(
+                criar_layout(250, barmode='stack'),
+                yaxis={'autorange': 'reversed'},
+                margin=dict(l=10, r=10, t=10, b=10)
+            )
+            st.plotly_chart(fig, use_container_width=True)
+
+    with tab2:
+        multiplos_busca = _detectar_multiplos_grupos_cat(df_sel)
+        if multiplos_busca:
+            df_fil = df_sel.copy()
+            df_fil['GRUPO'] = df_fil['FILIAL'].apply(lambda x: _get_nome_grupo_cat(x))
+            df_fil = df_fil.groupby('GRUPO').agg({
+                'VALOR_ORIGINAL': 'sum',
+                'SALDO': 'sum'
+            }).reset_index()
+            pie_labels = df_fil['GRUPO']
+        else:
+            df_fil = df_sel.copy()
+            df_fil['FILIAL_LABEL'] = df_fil['FILIAL'].astype(int).astype(str) + ' - ' + df_fil['NOME_FILIAL'].str.split(' - ').str[-1].str.strip()
+            df_fil = df_fil.groupby('FILIAL_LABEL').agg({
+                'VALOR_ORIGINAL': 'sum',
+                'SALDO': 'sum'
+            }).reset_index()
+            pie_labels = df_fil['FILIAL_LABEL']
+
+        if len(df_fil) > 0:
+            fig = go.Figure(go.Pie(
+                labels=pie_labels,
+                values=df_fil['VALOR_ORIGINAL'],
+                hole=0.4,
+                textinfo='percent+label',
+                textfont=dict(size=10)
+            ))
+            fig.update_layout(
+                criar_layout(250),
+                showlegend=False,
+                margin=dict(l=10, r=10, t=10, b=10)
+            )
+            st.plotly_chart(fig, use_container_width=True)
+
+    with tab3:
+        colunas = ['NOME_FILIAL', 'NOME_CLIENTE', 'TIPO', 'NUMERO', 'EMISSAO', 'VENCIMENTO', 'DT_BAIXA', 'DSO', 'VALOR_ORIGINAL', 'SALDO', 'STATUS']
+        colunas_disp = [c for c in colunas if c in df_sel.columns]
+        df_tab = df_sel[colunas_disp].nlargest(50, 'VALOR_ORIGINAL').copy()
+
+        for col in ['EMISSAO', 'VENCIMENTO', 'DT_BAIXA']:
+            if col in df_tab.columns:
+                df_tab[col] = pd.to_datetime(df_tab[col], errors='coerce').dt.strftime('%d/%m/%Y')
+                df_tab[col] = df_tab[col].fillna('-')
+
+        df_tab['VALOR_ORIGINAL'] = df_tab['VALOR_ORIGINAL'].apply(lambda x: formatar_moeda(x, completo=True))
+        df_tab['SALDO'] = df_tab['SALDO'].apply(lambda x: formatar_moeda(x, completo=True))
+
+        if 'DSO' in df_tab.columns:
+            df_tab['DSO'] = df_tab['DSO'].apply(lambda x: f"{int(x)}d" if pd.notna(x) else '-')
+
+        nomes = {
+            'NOME_FILIAL': 'Filial',
+            'NOME_CLIENTE': 'Cliente',
+            'TIPO': 'Tipo',
+            'NUMERO': 'Numero Doc',
+            'EMISSAO': 'Emissao',
+            'VENCIMENTO': 'Vencimento',
+            'DT_BAIXA': 'Dt Receb',
+            'DSO': 'Dias p/ Receber',
+            'VALOR_ORIGINAL': 'Valor',
+            'SALDO': 'Pendente',
+            'STATUS': 'Status'
+        }
+        df_tab.columns = [nomes.get(c, c) for c in df_tab.columns]
+
+        st.dataframe(df_tab, use_container_width=True, hide_index=True, height=300)
 
 
-def _render_ranking_categorias(df_cat, cores):
-    """Ranking completo com filtros"""
+def _render_ranking(df_cat, df_recebidos, cores):
+    """Ranking completo"""
 
     st.markdown("##### Ranking de Categorias")
 
+    # Filtros
     col1, col2, col3 = st.columns(3)
     with col1:
         ordenar = st.selectbox(
             "Ordenar por",
-            ["Valor Total", "Saldo Pendente", "Qtd Títulos", "% Pendente"],
-            key="ord_cat_rec"
+            ["Valor Total", "Saldo Pendente", "Prazo Medio", "Pontualidade"],
+            key="cat_ordem_rec"
         )
     with col2:
-        qtd_exibir = st.selectbox("Exibir", [15, 30, 50, "Todas"], key="qtd_cat_rec")
+        qtd_exibir = st.selectbox("Exibir", [15, 30, 50], key="cat_qtd_rec")
     with col3:
-        filtro_status = st.selectbox("Status", ["Todas", "Com Pendência", "Quitadas"], key="status_cat_rec")
+        filtro = st.selectbox("Filtrar", ["Todas", "Com Pendencia", "Quitadas"], key="cat_filtro_rec")
 
+    # Adicionar metricas de recebimento
     df_rank = df_cat.copy()
-    df_rank['% Pendente'] = (100 - df_rank['Pct_Recebido']).round(1)
 
-    if filtro_status == "Com Pendência":
+    if len(df_recebidos) > 0:
+        def calc_metricas(cat):
+            df_c = df_recebidos[df_recebidos['DESCRICAO'] == cat]
+            if len(df_c) == 0:
+                return pd.Series({'Prazo': None, 'Pontualidade': None})
+
+            prazo = None
+            pont = None
+
+            if 'DIAS_PARA_RECEBER' in df_c.columns:
+                p = df_c['DIAS_PARA_RECEBER'].dropna()
+                if len(p) > 0:
+                    prazo = p.mean()
+
+            if 'DIAS_ATRASO_RECEB' in df_c.columns:
+                a = df_c['DIAS_ATRASO_RECEB'].dropna()
+                if len(a) > 0:
+                    pont = (a <= 0).sum() / len(a) * 100
+
+            return pd.Series({'Prazo': prazo, 'Pontualidade': pont})
+
+        metricas = df_rank['Categoria'].apply(calc_metricas)
+        df_rank = pd.concat([df_rank, metricas], axis=1)
+    else:
+        df_rank['Prazo'] = None
+        df_rank['Pontualidade'] = None
+
+    # Filtrar
+    if filtro == "Com Pendencia":
         df_rank = df_rank[df_rank['Pendente'] > 0]
-    elif filtro_status == "Quitadas":
+    elif filtro == "Quitadas":
         df_rank = df_rank[df_rank['Pendente'] <= 0]
 
+    # Ordenar
     if ordenar == "Valor Total":
         df_rank = df_rank.sort_values('Total', ascending=False)
     elif ordenar == "Saldo Pendente":
         df_rank = df_rank.sort_values('Pendente', ascending=False)
-    elif ordenar == "Qtd Títulos":
-        df_rank = df_rank.sort_values('Qtd', ascending=False)
+    elif ordenar == "Prazo Medio":
+        df_rank = df_rank.sort_values('Prazo', ascending=False, na_position='last')
     else:
-        df_rank = df_rank.sort_values('% Pendente', ascending=False)
+        df_rank = df_rank.sort_values('Pontualidade', ascending=True, na_position='last')
 
-    if qtd_exibir != "Todas":
-        df_rank = df_rank.head(qtd_exibir)
+    df_rank = df_rank.head(qtd_exibir)
 
-    df_show = df_rank[['Categoria', 'Total', 'Pendente', 'Qtd', 'Clientes', 'Pct_Recebido']].copy()
+    # Formatar
+    df_show = df_rank[['Categoria', 'Total', 'Pendente', 'Qtd', 'Clientes', 'Prazo', 'Pontualidade', 'Pct_Recebido']].copy()
     df_show['Total'] = df_show['Total'].apply(lambda x: formatar_moeda(x, completo=True))
     df_show['Pendente'] = df_show['Pendente'].apply(lambda x: formatar_moeda(x, completo=True))
-    df_show.columns = ['Categoria', 'Total', 'Pendente', 'Títulos', 'Clientes', '% Recebido']
+    df_show['Prazo'] = df_show['Prazo'].apply(lambda x: f"{x:.0f}d" if pd.notna(x) else '-')
+    df_show['Pontualidade'] = df_show['Pontualidade'].apply(lambda x: f"{x:.0f}%" if pd.notna(x) else '-')
+    df_show.columns = ['Categoria', 'Total', 'Pendente', 'Titulos', 'Clientes', 'Prazo', 'Pontualidade', '% Recebido']
 
     st.dataframe(
         df_show,
@@ -1022,12 +995,11 @@ def _render_ranking_categorias(df_cat, cores):
         column_config={
             "% Recebido": st.column_config.ProgressColumn(
                 "% Recebido",
-                help="Percentual recebido",
                 format="%.1f%%",
                 min_value=0,
-                max_value=100,
-            ),
+                max_value=100
+            )
         }
     )
 
-    st.caption(f"Exibindo {len(df_show)} categorias | Total geral: {formatar_moeda(df_cat['Total'].sum(), completo=True)}")
+    st.caption(f"Exibindo {len(df_show)} categorias")

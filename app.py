@@ -37,6 +37,7 @@ from tabs.adiantamentos import render_adiantamentos
 from tabs.bancos import render_bancos
 from tabs.juros_cambio import render_juros_cambio
 from tabs.detalhes import render_detalhes
+from tabs.provisoes import render_provisoes
 
 
 # Funções com @st.fragment para evitar rerun completo da página
@@ -77,9 +78,12 @@ def _preparar_dados_pagar(_df_contas):
     )
     df_sem_ic = _df_contas[~mask_intercompany]
 
-    # Excluir tipos que duplicam valores (FAT, etc.)
+    # Separar tipos excluidos (FAT, PR) para aba propria
+    df_provisoes = pd.DataFrame()
     if 'TIPO' in df_sem_ic.columns and TIPOS_EXCLUIDOS:
-        df_sem_ic = df_sem_ic[~df_sem_ic['TIPO'].str.strip().isin(TIPOS_EXCLUIDOS)]
+        mask_excluidos = df_sem_ic['TIPO'].str.strip().isin(TIPOS_EXCLUIDOS)
+        df_provisoes = df_sem_ic[mask_excluidos]
+        df_sem_ic = df_sem_ic[~mask_excluidos]
 
     # Extrair adiantamentos (TIPO=PA ou DESCRICAO contendo ADTO/ADIANT)
     mask_tipo_adto = df_sem_ic['TIPO'].isin(['PA', 'ADI'])
@@ -95,7 +99,7 @@ def _preparar_dados_pagar(_df_contas):
     df_custos_financeiros = df_sem_adto[mask_custos_fin]
     df_contas_sem_ic = df_sem_adto[~mask_custos_fin]
 
-    return df_contas_sem_ic, df_custos_financeiros, df_adiantamentos
+    return df_contas_sem_ic, df_custos_financeiros, df_adiantamentos, df_provisoes
 
 
 def main():
@@ -114,7 +118,7 @@ def main():
     df_contas, df_baixas = carregar_dados()
 
     # Pre-processar dados (cacheado) - extrai adiantamentos do proprio Contas a Pagar
-    df_contas_sem_ic, df_custos_financeiros, df_adiant = _preparar_dados_pagar(df_contas)
+    df_contas_sem_ic, df_custos_financeiros, df_adiant, df_provisoes = _preparar_dados_pagar(df_contas)
 
     # Obter opcoes de filtros (SEM intercompany e SEM adiantamentos)
     filiais_por_grupo, categorias_opcoes = get_opcoes_filtros(df_contas_sem_ic)
@@ -151,10 +155,10 @@ def main():
         cor=cores['primaria']
     )
 
-    # Tabs (10 tabs)
-    tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10 = st.tabs([
+    # Tabs (11 tabs)
+    tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10, tab11 = st.tabs([
         "Visao Geral", "Vencimentos", "Fornecedores", "Categorias",
-        "Tipo Documento", "Formas Pagto", "Bancos", "Juros e Cambio", "Adiantamentos", "Detalhes"
+        "Tipo Documento", "Formas Pagto", "Bancos", "Juros e Cambio", "Adiantamentos", "FAT/FT/PR", "Detalhes"
     ])
 
     with tab1:
@@ -209,6 +213,23 @@ def main():
         render_adiantamentos(df_adiant_filtrado, df_baixas_filtrado)
 
     with tab10:
+        # FAT / PR - filtrar por filial e data, excluir bancos (ficam na aba Bancos)
+        df_prov_filtrado = df_provisoes
+        if 'DESCRICAO' in df_prov_filtrado.columns:
+            mask_banco = df_prov_filtrado['DESCRICAO'].str.upper().str.contains(
+                '|'.join(PADROES_CUSTOS_FINANCEIROS), na=False, regex=True
+            )
+            df_prov_filtrado = df_prov_filtrado[~mask_banco]
+        if filtro_filiais is not None and 'FILIAL' in df_prov_filtrado.columns:
+            df_prov_filtrado = df_prov_filtrado[df_prov_filtrado['FILIAL'].isin(filtro_filiais)]
+        if 'EMISSAO' in df_prov_filtrado.columns:
+            df_prov_filtrado = df_prov_filtrado[
+                (df_prov_filtrado['EMISSAO'].dt.date >= data_inicio) &
+                (df_prov_filtrado['EMISSAO'].dt.date <= data_fim)
+            ]
+        render_provisoes(df_prov_filtrado)
+
+    with tab11:
         fragment_detalhes(df)
 
     # Footer

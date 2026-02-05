@@ -94,6 +94,11 @@ def render_tipo_documento(df):
 
     st.divider()
 
+    # ========== CATEGORIAS POR TIPO ==========
+    _render_categorias_por_tipo(df, cores)
+
+    st.divider()
+
     # ========== TABELA DETALHADA ==========
     _render_tabela_tipos(df, df_pendentes, df_vencidos, cores)
 
@@ -162,44 +167,75 @@ def _render_distribuicao_quantidade(df, cores):
 
 
 def _render_status_por_tipo(df, cores):
-    """Status por tipo de documento"""
+    """Status por tipo de documento - barras horizontais proporcionais"""
     st.markdown("##### Status por Tipo")
 
-    # Agrupar por tipo e status
-    df_status = df.groupby(['TIPO', 'STATUS']).agg({
-        'VALOR_ORIGINAL': 'sum'
-    }).reset_index()
+    # Top 8 tipos por valor
+    tipos = df.groupby('TIPO')['VALOR_ORIGINAL'].sum().nlargest(8).index.tolist()
+    df_filtrado = df[df['TIPO'].isin(tipos)]
 
-    # Pivot para ter status como colunas
-    tipos = df['TIPO'].value_counts().head(8).index.tolist()
-    df_status = df_status[df_status['TIPO'].isin(tipos)]
+    if len(df_filtrado) == 0:
+        st.info("Sem dados")
+        return
+
+    # Simplificar status para 3 grupos
+    def agrupar_status(s):
+        if s == 'Pago':
+            return 'Pago'
+        elif s == 'Vencido':
+            return 'Vencido'
+        return 'A Vencer'
+
+    df_filtrado = df_filtrado.copy()
+    df_filtrado['STATUS_GRUPO'] = df_filtrado['STATUS'].apply(agrupar_status)
+
+    # Pivot: tipo x status_grupo
+    pivot = df_filtrado.pivot_table(
+        values='VALOR_ORIGINAL', index='TIPO', columns='STATUS_GRUPO',
+        aggfunc='sum', fill_value=0
+    )
+
+    # Ordenar por total
+    pivot['_total'] = pivot.sum(axis=1)
+    pivot = pivot.sort_values('_total', ascending=True)
+    pivot = pivot.drop(columns='_total')
+
+    # Calcular percentuais
+    totais = pivot.sum(axis=1)
+    pivot_pct = pivot.div(totais, axis=0) * 100
+
+    ordem_status = ['Pago', 'A Vencer', 'Vencido']
+    cores_status = {
+        'Pago': cores['sucesso'],
+        'A Vencer': cores['info'],
+        'Vencido': cores['perigo']
+    }
 
     fig = go.Figure()
 
-    # Cores por status
-    status_cores = {
-        'Pago': cores['sucesso'],
-        'Vencido': cores['perigo'],
-        'Vence em 7 dias': cores['alerta'],
-        'Vence em 15 dias': '#f59e0b',
-        'Vence em 30 dias': cores['info'],
-        'Vence em 60 dias': '#8b5cf6',
-        'Vence em +60 dias': cores['texto_secundario']
-    }
-
-    for status in df_status['STATUS'].unique():
-        df_s = df_status[df_status['STATUS'] == status]
+    for status in ordem_status:
+        if status not in pivot_pct.columns:
+            continue
         fig.add_trace(go.Bar(
-            x=df_s['TIPO'],
-            y=df_s['VALOR_ORIGINAL'],
+            y=pivot.index,
+            x=pivot_pct[status],
+            orientation='h',
             name=status,
-            marker_color=status_cores.get(status, cores['texto_secundario'])
+            marker_color=cores_status[status],
+            text=[f"{p:.0f}%" if p >= 8 else '' for p in pivot_pct[status]],
+            textposition='inside',
+            textfont=dict(size=10, color='white'),
+            customdata=[formatar_moeda(v) for v in pivot[status]],
+            hovertemplate='<b>%{y}</b> - ' + status + '<br>%{customdata} (%{x:.1f}%)<extra></extra>'
         ))
 
     fig.update_layout(
         criar_layout(300, barmode='stack'),
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1, font=dict(size=8)),
-        margin=dict(l=10, r=10, t=40, b=10)
+        xaxis=dict(showticklabels=False, showgrid=False, range=[0, 100]),
+        yaxis=dict(tickfont=dict(size=10, color=cores['texto'])),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="center", x=0.5,
+                    font=dict(size=10, color=cores['texto'])),
+        margin=dict(l=10, r=10, t=35, b=10)
     )
 
     st.plotly_chart(fig, use_container_width=True)
@@ -236,6 +272,71 @@ def _render_vencidos_por_tipo(df_vencidos, cores):
     )
 
     st.plotly_chart(fig, use_container_width=True)
+
+
+def _render_categorias_por_tipo(df, cores):
+    """Quantidade de documentos por categoria para cada tipo"""
+    st.markdown("##### Categorias por Tipo de Documento")
+
+    if 'DESCRICAO' not in df.columns:
+        st.info("Coluna de categoria nao disponivel.")
+        return
+
+    tipos_disp = df['TIPO'].value_counts().index.tolist()
+    tipo_sel = st.selectbox("Selecione o tipo de documento", tipos_disp, key='tipo_doc_cat')
+
+    df_tipo = df[df['TIPO'] == tipo_sel]
+
+    if len(df_tipo) == 0:
+        st.info(f"Nenhum titulo do tipo {tipo_sel}.")
+        return
+
+    # Agrupar por categoria
+    df_cat = df_tipo.groupby('DESCRICAO').agg({
+        'VALOR_ORIGINAL': ['count', 'sum'],
+        'SALDO': 'sum'
+    }).reset_index()
+    df_cat.columns = ['Categoria', 'Qtd', 'Valor Total', 'Pendente']
+    df_cat['Pago'] = (df_cat['Valor Total'] - df_cat['Pendente']).clip(lower=0)
+    df_cat = df_cat.sort_values('Qtd', ascending=False)
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        # Grafico top 10 por quantidade
+        df_top = df_cat.head(10).sort_values('Qtd', ascending=True)
+
+        fig = go.Figure(go.Bar(
+            y=df_top['Categoria'].str[:25],
+            x=df_top['Qtd'],
+            orientation='h',
+            marker_color=cores['primaria'],
+            text=df_top['Qtd'],
+            textposition='outside',
+            textfont=dict(size=9, color=cores['texto'])
+        ))
+
+        fig.update_layout(
+            criar_layout(320),
+            margin=dict(l=10, r=40, t=10, b=10),
+            xaxis=dict(showticklabels=False, showgrid=False),
+            yaxis=dict(tickfont=dict(size=9, color=cores['texto'])),
+            showlegend=False
+        )
+
+        st.markdown(f"###### Top 10 Categorias - {tipo_sel} (por quantidade)")
+        st.plotly_chart(fig, use_container_width=True)
+
+    with col2:
+        # Tabela completa
+        st.markdown(f"###### Todas as Categorias - {tipo_sel}")
+        df_show = df_cat.copy()
+        df_show['Valor Total'] = df_show['Valor Total'].apply(lambda x: formatar_moeda(x, completo=True))
+        df_show['Pago'] = df_show['Pago'].apply(lambda x: formatar_moeda(x, completo=True))
+        df_show['Pendente'] = df_show['Pendente'].apply(lambda x: formatar_moeda(x, completo=True))
+
+        st.dataframe(df_show, use_container_width=True, hide_index=True, height=320)
+        st.caption(f"{len(df_cat)} categorias no tipo {tipo_sel} | {formatar_numero(len(df_tipo))} titulos")
 
 
 def _render_tabela_tipos(df, df_pendentes, df_vencidos, cores):

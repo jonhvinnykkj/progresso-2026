@@ -63,11 +63,6 @@ def render_vencimentos(df):
 
     st.divider()
 
-    # ========== FLUXO SEMANAL ==========
-    _render_fluxo_semanal(df_pendentes, cores, hoje)
-
-    st.divider()
-
     # ========== DETALHAMENTO ==========
     _render_detalhamento(df_pendentes, df_vencidos, cores, hoje)
 
@@ -92,12 +87,12 @@ def _render_resumo_geral(df_pendentes, df_vencidos, cores, hoje):
     qtd_30d = len(df_30d)
 
     data_60d = hoje_date + timedelta(days=60)
-    df_60d = df_pendentes[
+    df_31_60d = df_pendentes[
         (df_pendentes['VENCIMENTO'] > pd.Timestamp(data_30d)) &
         (df_pendentes['VENCIMENTO'] <= pd.Timestamp(data_60d))
     ]
-    valor_60d = df_60d['SALDO'].sum()
-    qtd_60d = len(df_60d)
+    valor_31_60d = df_31_60d['SALDO'].sum()
+    qtd_31_60d = len(df_31_60d)
 
     pct_vencido = (total_vencido / total_pendente * 100) if total_pendente > 0 else 0
 
@@ -130,8 +125,8 @@ def _render_resumo_geral(df_pendentes, df_vencidos, cores, hoje):
                     border-radius: 12px; padding: 1.25rem;">
             <p style="color: {cores['info']}; font-size: 0.75rem; margin: 0;">31-60 DIAS</p>
             <p style="color: {cores['info']}; font-size: 1.5rem; font-weight: 700; margin: 0.25rem 0;">
-                {formatar_moeda(valor_60d)}</p>
-            <p style="color: {cores['texto_secundario']}; font-size: 0.7rem; margin: 0;">{qtd_60d} titulos</p>
+                {formatar_moeda(valor_31_60d)}</p>
+            <p style="color: {cores['texto_secundario']}; font-size: 0.7rem; margin: 0;">{qtd_31_60d} titulos</p>
         </div>
     </div>
     """, unsafe_allow_html=True)
@@ -550,14 +545,15 @@ def _render_vencidos_criticos(df_vencidos, cores):
     """Top titulos vencidos - maiores valores com dias de atraso"""
 
     st.markdown("##### Vencidos Criticos - Acao Imediata")
+    st.caption("Top 15 titulos com maior valor pendente entre os vencidos (STATUS = Vencido), ordenados por saldo. A coluna Atraso mostra quantos dias se passaram desde o vencimento.")
 
     if len(df_vencidos) == 0:
         st.success("Nenhum titulo vencido!")
         return
 
-    df_top = df_vencidos.nlargest(10, 'SALDO').copy()
+    df_top = df_vencidos.nlargest(15, 'SALDO').copy()
 
-    colunas = ['NOME_FORNECEDOR', 'SALDO', 'DIAS_ATRASO', 'NOME_FILIAL', 'DESCRICAO']
+    colunas = ['NOME_FORNECEDOR', 'NOME_FILIAL', 'TIPO', 'NUMERO', 'VENCIMENTO', 'DIAS_ATRASO', 'VALOR_ORIGINAL', 'SALDO']
     colunas_disp = [c for c in colunas if c in df_top.columns]
     df_show = df_top[colunas_disp].copy()
 
@@ -565,20 +561,27 @@ def _render_vencidos_criticos(df_vencidos, cores):
         df_show['NOME_FORNECEDOR'] = df_show['NOME_FORNECEDOR'].str[:30]
     if 'NOME_FILIAL' in df_show.columns:
         df_show['NOME_FILIAL'] = df_show['NOME_FILIAL'].str.split(' - ').str[-1].str.strip()
-    if 'DESCRICAO' in df_show.columns:
-        df_show['DESCRICAO'] = df_show['DESCRICAO'].str[:20]
-
-    df_show['SALDO'] = df_show['SALDO'].apply(lambda x: formatar_moeda(x, completo=True))
+    if 'NUMERO' in df_show.columns:
+        df_show['NUMERO'] = df_show['NUMERO'].apply(
+            lambda x: str(int(x)) if pd.notna(x) and str(x).replace('.0', '').isdigit() else (str(x) if pd.notna(x) else '-'))
+    if 'VENCIMENTO' in df_show.columns:
+        df_show['VENCIMENTO'] = df_show['VENCIMENTO'].dt.strftime('%d/%m/%Y')
     if 'DIAS_ATRASO' in df_show.columns:
         df_show['DIAS_ATRASO'] = df_show['DIAS_ATRASO'].apply(
-            lambda x: f"{int(x)}d" if pd.notna(x) else '-')
+            lambda x: f"{int(x)} dias" if pd.notna(x) else '-')
+    if 'VALOR_ORIGINAL' in df_show.columns:
+        df_show['VALOR_ORIGINAL'] = df_show['VALOR_ORIGINAL'].apply(lambda x: formatar_moeda(x, completo=True))
+    df_show['SALDO'] = df_show['SALDO'].apply(lambda x: formatar_moeda(x, completo=True))
 
     nomes = {
         'NOME_FORNECEDOR': 'Fornecedor',
-        'SALDO': 'Valor',
-        'DIAS_ATRASO': 'Atraso',
         'NOME_FILIAL': 'Filial',
-        'DESCRICAO': 'Categoria'
+        'TIPO': 'Tipo',
+        'NUMERO': 'Numero Doc',
+        'VENCIMENTO': 'Vencimento',
+        'DIAS_ATRASO': 'Atraso',
+        'VALOR_ORIGINAL': 'Valor Original',
+        'SALDO': 'Pendente'
     }
     df_show.columns = [nomes.get(c, c) for c in df_show.columns]
 
@@ -825,7 +828,7 @@ def _render_detalhamento(df_pendentes, df_vencidos, cores, hoje):
     st.markdown(f"**{len(df_show)} titulos** | Total: **{formatar_moeda(total)}**")
 
     # Tabela
-    colunas = ['NOME_FILIAL', 'NOME_FORNECEDOR', 'NUMERO', 'DESCRICAO', 'VENCIMENTO', 'SALDO', 'STATUS']
+    colunas = ['NOME_FILIAL', 'NOME_FORNECEDOR', 'TIPO', 'NUMERO', 'DESCRICAO', 'VENCIMENTO', 'SALDO', 'STATUS']
     colunas_disp = [c for c in colunas if c in df_show.columns]
     df_tab = df_show[colunas_disp].copy()
 
@@ -838,10 +841,11 @@ def _render_detalhamento(df_pendentes, df_vencidos, cores, hoje):
     nomes = {
         'NOME_FILIAL': 'Filial',
         'NOME_FORNECEDOR': 'Fornecedor',
-        'NUMERO': 'NF/Doc',
+        'TIPO': 'Tipo',
+        'NUMERO': 'Numero Doc',
         'DESCRICAO': 'Categoria',
         'VENCIMENTO': 'Vencimento',
-        'SALDO': 'Valor',
+        'SALDO': 'Pendente',
         'STATUS': 'Status'
     }
     df_tab.columns = [nomes.get(c, c) for c in df_tab.columns]

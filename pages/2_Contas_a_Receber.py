@@ -42,6 +42,7 @@ from tabs_receber.categorias import render_categorias_receber
 from tabs_receber.adiantamentos import render_adiantamentos_receber
 from tabs_receber.tipo_documento import render_tipo_documento
 from tabs_receber.detalhes import render_detalhes_receber
+from tabs_receber.provisoes import render_provisoes_receber
 
 
 # Fragments para evitar rerun completo
@@ -75,9 +76,12 @@ def _preparar_dados_receber(_df_contas_raw, _df_baixas_raw):
     )
     df_sem_ic = _df_contas_raw[~mask_cliente_ic]
 
-    # Excluir tipos que duplicam valores (FAT, etc.)
+    # Separar tipos excluidos (FAT, PR) para aba propria
+    df_provisoes = pd.DataFrame()
     if 'TIPO' in df_sem_ic.columns and TIPOS_EXCLUIDOS:
-        df_sem_ic = df_sem_ic[~df_sem_ic['TIPO'].str.strip().isin(TIPOS_EXCLUIDOS)]
+        mask_excluidos = df_sem_ic['TIPO'].str.strip().isin(TIPOS_EXCLUIDOS)
+        df_provisoes = df_sem_ic[mask_excluidos]
+        df_sem_ic = df_sem_ic[~mask_excluidos]
 
     # Baixas: filtrar intercompany por NOME_CLIENTE
     df_baixas = _df_baixas_raw
@@ -95,7 +99,7 @@ def _preparar_dados_receber(_df_contas_raw, _df_baixas_raw):
     df_adiant = df_sem_ic[mask_adiantamento]
     df_contas = df_sem_ic[~mask_adiantamento]
 
-    return df_contas, df_adiant, df_baixas
+    return df_contas, df_adiant, df_baixas, df_provisoes
 
 
 def main():
@@ -110,7 +114,7 @@ def main():
     df_contas_raw, df_baixas_raw = carregar_dados_receber()
 
     # Pre-processar dados (cacheado) - extrai adiantamentos do proprio Contas a Receber
-    df_contas, df_adiant, df_baixas = _preparar_dados_receber(df_contas_raw, df_baixas_raw)
+    df_contas, df_adiant, df_baixas, df_provisoes = _preparar_dados_receber(df_contas_raw, df_baixas_raw)
 
     filiais_por_grupo, categorias_opcoes = get_opcoes_filtros_receber(df_contas)
 
@@ -229,10 +233,10 @@ def main():
         cor=cores['sucesso']
     )
 
-    # Tabs (7 tabs) - Estrutura otimizada para dados de Receber
-    tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
+    # Tabs (8 tabs) - Estrutura otimizada para dados de Receber
+    tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
         "Visao Geral", "Vencimentos", "Clientes", "Categorias",
-        "Tipos", "Adiantamentos", "Detalhes"
+        "Tipos", "Adiantamentos", "FAT/FT/PR", "Detalhes"
     ])
 
     with tab1:
@@ -275,6 +279,18 @@ def main():
         render_adiantamentos_receber(df_adiant_filtrado, df_baixas_filtrado)
 
     with tab7:
+        # FAT / PR - filtrar por filial e data
+        df_prov_filtrado = df_provisoes
+        if filtro_filiais is not None and 'FILIAL' in df_prov_filtrado.columns:
+            df_prov_filtrado = df_prov_filtrado[df_prov_filtrado['FILIAL'].isin(filtro_filiais)]
+        if 'EMISSAO' in df_prov_filtrado.columns:
+            df_prov_filtrado = df_prov_filtrado[
+                (df_prov_filtrado['EMISSAO'].dt.date >= data_inicio) &
+                (df_prov_filtrado['EMISSAO'].dt.date <= data_fim)
+            ]
+        render_provisoes_receber(df_prov_filtrado)
+
+    with tab8:
         fragment_detalhes(df)
 
     # Footer

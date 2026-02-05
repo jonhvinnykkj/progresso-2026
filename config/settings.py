@@ -83,8 +83,9 @@ def get_grupo_filial(cod_filial):
 
 # Tipos de documento excluidos dos totalizadores (duplicam valores)
 # FAT = Faturamento (duplica NF)
-# PR  = Provisao de contratos (pendente validacao com Fernando)
-TIPOS_EXCLUIDOS = ['FAT']
+# FT  = Fatura (vinculado ao FAT)
+# PR  = Provisao de contratos
+TIPOS_EXCLUIDOS = ['FAT', 'FT', 'PR']
 
 OPCOES_PERIODO_RAPIDO = [
     'Todos os dados', 'Hoje', 'Últimos 7 dias', 'Últimos 30 dias',

@@ -182,6 +182,8 @@ def _resumo_grupos(df_pagar, df_receber):
         if tem_origem:
             paga = pagar_orig['SALDO'].sum()
             recebe = receber_orig['SALDO'].sum()
+            pago_pagar = (pagar_orig['VALOR_ORIGINAL'].sum() - paga) if 'VALOR_ORIGINAL' in pagar_orig.columns else 0
+            pago_receber = (receber_orig['VALOR_ORIGINAL'].sum() - recebe) if 'VALOR_ORIGINAL' in receber_orig.columns else 0
             qtd_p = len(pagar_orig)
             qtd_r = len(receber_orig)
         else:
@@ -189,11 +191,14 @@ def _resumo_grupos(df_pagar, df_receber):
             receber_dest = df_receber[df_receber['GRUPO_DESTINO'] == grupo]
             paga = receber_dest['SALDO'].sum()
             recebe = pagar_dest['SALDO'].sum()
+            pago_pagar = (receber_dest['VALOR_ORIGINAL'].sum() - paga) if 'VALOR_ORIGINAL' in receber_dest.columns else 0
+            pago_receber = (pagar_dest['VALOR_ORIGINAL'].sum() - recebe) if 'VALOR_ORIGINAL' in pagar_dest.columns else 0
             qtd_p = len(receber_dest)
             qtd_r = len(pagar_dest)
 
         rows.append({
             'Grupo': grupo, 'Paga': paga, 'Recebe': recebe,
+            'Pago_Pagar': max(pago_pagar, 0), 'Pago_Receber': max(pago_receber, 0),
             'Qtd_Pagar': qtd_p, 'Qtd_Receber': qtd_r
         })
 
@@ -341,6 +346,8 @@ def _render_visao_geral(df_pagar, df_receber, conciliacao, cores):
             'grupo': grupo,
             'paga': row['Paga'],
             'recebe': row['Recebe'],
+            'pago_pagar': row['Pago_Pagar'],
+            'pago_receber': row['Pago_Receber'],
             'qtd_pagar': int(row['Qtd_Pagar']),
             'qtd_receber': int(row['Qtd_Receber']),
             'divergentes': divergentes,
@@ -387,54 +394,98 @@ def _render_visao_geral(df_pagar, df_receber, conciliacao, cores):
 
     st.divider()
 
-    # --- Grafico de distribuicao por grupo (usando mesmos dados dos cards) ---
+    # --- Graficos de barras por grupo ---
+    df_grupos = pd.DataFrame([{
+        'Grupo': gd['grupo'],
+        'Pago': gd['pago_pagar'],
+        'Pendente Pagar': gd['paga'],
+        'Recebido': gd['pago_receber'],
+        'Pendente Receber': gd['recebe']
+    } for gd in grupos_data])
+
     col1, col2 = st.columns(2)
 
-    pie_pagar = pd.DataFrame([{'Grupo': gd['grupo'], 'Saldo': gd['paga']} for gd in grupos_data])
-    pie_pagar = pie_pagar[pie_pagar['Saldo'] > 0].sort_values('Saldo', ascending=False)
-
-    pie_receber = pd.DataFrame([{'Grupo': gd['grupo'], 'Saldo': gd['recebe']} for gd in grupos_data])
-    pie_receber = pie_receber[pie_receber['Saldo'] > 0].sort_values('Saldo', ascending=False)
-
     with col1:
-        st.markdown("##### Distribuicao A Pagar por Grupo")
+        st.markdown("##### A Pagar por Grupo")
+        df_pagar_g = df_grupos[['Grupo', 'Pago', 'Pendente Pagar']].copy()
+        df_pagar_g = df_pagar_g[(df_pagar_g['Pago'] > 0) | (df_pagar_g['Pendente Pagar'] > 0)]
+        df_pagar_g = df_pagar_g.sort_values('Pendente Pagar', ascending=True)
 
-        if len(pie_pagar) > 0:
-            fig = go.Figure(data=[go.Pie(
-                labels=pie_pagar['Grupo'],
-                values=pie_pagar['Saldo'],
-                hole=0.4,
-                textinfo='label+percent',
-                textfont=dict(size=10, color=cores['texto']),
-                marker=dict(colors=[cores['perigo'], cores['primaria'], cores['alerta'], cores['info']])
-            )])
+        if len(df_pagar_g) > 0:
+            fig = go.Figure()
+            fig.add_trace(go.Bar(
+                y=df_pagar_g['Grupo'],
+                x=df_pagar_g['Pago'],
+                orientation='h',
+                name='Pago',
+                marker_color=cores['sucesso'],
+                text=[formatar_moeda(v) if v > 0 else '' for v in df_pagar_g['Pago']],
+                textposition='inside',
+                textfont=dict(size=9, color='white')
+            ))
+            fig.add_trace(go.Bar(
+                y=df_pagar_g['Grupo'],
+                x=df_pagar_g['Pendente Pagar'],
+                orientation='h',
+                name='Pendente',
+                marker_color=cores['perigo'],
+                text=[formatar_moeda(v) if v > 0 else '' for v in df_pagar_g['Pendente Pagar']],
+                textposition='inside',
+                textfont=dict(size=9, color='white')
+            ))
             fig.update_layout(
                 height=300,
                 margin=dict(l=10, r=10, t=10, b=10),
                 paper_bgcolor='rgba(0,0,0,0)',
-                showlegend=False
+                plot_bgcolor='rgba(0,0,0,0)',
+                barmode='stack',
+                xaxis=dict(showticklabels=False, showgrid=False),
+                yaxis=dict(tickfont=dict(size=10, color=cores['texto'])),
+                legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='right', x=1,
+                            font=dict(size=10, color=cores['texto']))
             )
             st.plotly_chart(fig, use_container_width=True)
         else:
             st.info("Sem dados de A Pagar intercompany")
 
     with col2:
-        st.markdown("##### Distribuicao A Receber por Grupo")
+        st.markdown("##### A Receber por Grupo")
+        df_receber_g = df_grupos[['Grupo', 'Recebido', 'Pendente Receber']].copy()
+        df_receber_g = df_receber_g[(df_receber_g['Recebido'] > 0) | (df_receber_g['Pendente Receber'] > 0)]
+        df_receber_g = df_receber_g.sort_values('Pendente Receber', ascending=True)
 
-        if len(pie_receber) > 0:
-            fig = go.Figure(data=[go.Pie(
-                labels=pie_receber['Grupo'],
-                values=pie_receber['Saldo'],
-                hole=0.4,
-                textinfo='label+percent',
-                textfont=dict(size=10, color=cores['texto']),
-                marker=dict(colors=[cores['sucesso'], cores['primaria'], cores['alerta'], cores['info']])
-            )])
+        if len(df_receber_g) > 0:
+            fig = go.Figure()
+            fig.add_trace(go.Bar(
+                y=df_receber_g['Grupo'],
+                x=df_receber_g['Recebido'],
+                orientation='h',
+                name='Recebido',
+                marker_color=cores['sucesso'],
+                text=[formatar_moeda(v) if v > 0 else '' for v in df_receber_g['Recebido']],
+                textposition='inside',
+                textfont=dict(size=9, color='white')
+            ))
+            fig.add_trace(go.Bar(
+                y=df_receber_g['Grupo'],
+                x=df_receber_g['Pendente Receber'],
+                orientation='h',
+                name='Pendente',
+                marker_color=cores['alerta'],
+                text=[formatar_moeda(v) if v > 0 else '' for v in df_receber_g['Pendente Receber']],
+                textposition='inside',
+                textfont=dict(size=9, color='white')
+            ))
             fig.update_layout(
                 height=300,
                 margin=dict(l=10, r=10, t=10, b=10),
                 paper_bgcolor='rgba(0,0,0,0)',
-                showlegend=False
+                plot_bgcolor='rgba(0,0,0,0)',
+                barmode='stack',
+                xaxis=dict(showticklabels=False, showgrid=False),
+                yaxis=dict(tickfont=dict(size=10, color=cores['texto'])),
+                legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='right', x=1,
+                            font=dict(size=10, color=cores['texto']))
             )
             st.plotly_chart(fig, use_container_width=True)
         else:
@@ -1103,7 +1154,7 @@ def _render_detalhes_pagar(df_pagar, cores):
         filtro_tipo = st.selectbox("Tipo Doc", tipos, key="pagar_tipo")
 
     with col5:
-        ordenar = st.selectbox("Ordenar", ["Maior Saldo", "Mais Recente", "Mais Antigo"], key="pagar_ordem")
+        ordenar = st.selectbox("Ordenar", ["Maior Pendente", "Mais Recente", "Mais Antigo"], key="pagar_ordem")
 
     df_show = df_pagar.copy()
 
@@ -1118,7 +1169,7 @@ def _render_detalhes_pagar(df_pagar, cores):
     if filtro_tipo != 'Todos' and 'TIPO' in df_show.columns:
         df_show = df_show[df_show['TIPO'] == filtro_tipo]
 
-    if ordenar == "Maior Saldo":
+    if ordenar == "Maior Pendente":
         df_show = df_show.sort_values('SALDO', ascending=False)
     elif ordenar == "Mais Recente":
         df_show = df_show.sort_values('EMISSAO', ascending=False)
@@ -1155,7 +1206,7 @@ def _render_detalhes_pagar(df_pagar, cores):
         'EMISSAO': 'Emissao',
         'VENCIMENTO': 'Vencimento',
         'VALOR_ORIGINAL': 'Valor',
-        'SALDO': 'Saldo',
+        'SALDO': 'Pendente',
         'STATUS': 'Status'
     }
     df_tab.columns = [nomes.get(c, c) for c in df_tab.columns]
@@ -1194,7 +1245,7 @@ def _render_detalhes_receber(df_receber, cores):
         filtro_tipo = st.selectbox("Tipo Doc", tipos, key="receber_tipo")
 
     with col5:
-        ordenar = st.selectbox("Ordenar", ["Maior Saldo", "Mais Recente", "Mais Antigo"], key="receber_ordem")
+        ordenar = st.selectbox("Ordenar", ["Maior Pendente", "Mais Recente", "Mais Antigo"], key="receber_ordem")
 
     df_show = df_receber.copy()
 
@@ -1209,7 +1260,7 @@ def _render_detalhes_receber(df_receber, cores):
     if filtro_tipo != 'Todos' and 'TIPO' in df_show.columns:
         df_show = df_show[df_show['TIPO'] == filtro_tipo]
 
-    if ordenar == "Maior Saldo":
+    if ordenar == "Maior Pendente":
         df_show = df_show.sort_values('SALDO', ascending=False)
     elif ordenar == "Mais Recente":
         df_show = df_show.sort_values('EMISSAO', ascending=False)
@@ -1246,7 +1297,7 @@ def _render_detalhes_receber(df_receber, cores):
         'EMISSAO': 'Emissao',
         'VENCIMENTO': 'Vencimento',
         'VALOR_ORIGINAL': 'Valor',
-        'SALDO': 'Saldo',
+        'SALDO': 'Pendente',
         'STATUS': 'Status'
     }
     df_tab.columns = [nomes.get(c, c) for c in df_tab.columns]

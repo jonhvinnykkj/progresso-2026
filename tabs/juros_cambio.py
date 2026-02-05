@@ -68,22 +68,23 @@ def _render_secao_juros(df, df_com_juros, cores):
     st.markdown("##### Filtros")
     col1, col2, col3 = st.columns(3)
 
+    # Listas de filtros baseadas apenas em titulos com juros/multa
+    df_base_filtro = df_com_juros if len(df_com_juros) > 0 else df
+
     with col1:
-        # Filtro de categoria
-        categorias = ['Todas'] + sorted([str(x) for x in df['DESCRICAO'].dropna().unique().tolist()])
+        categorias = ['Todas'] + sorted([str(x) for x in df_base_filtro['DESCRICAO'].dropna().unique().tolist()])
         filtro_categoria = st.selectbox("Categoria", categorias, key="juros_categoria")
 
     with col2:
-        # Filtro de fornecedor
-        fornecedores = ['Todos'] + sorted([str(x) for x in df['NOME_FORNECEDOR'].dropna().unique().tolist()])
+        fornecedores = ['Todos'] + sorted([str(x) for x in df_base_filtro['NOME_FORNECEDOR'].dropna().unique().tolist()])
         filtro_fornecedor = st.selectbox("Fornecedor", fornecedores, key="juros_fornecedor")
 
     with col3:
         # Filtro de tipo de custo
         tipo_custo = st.selectbox("Tipo de Custo", ["Todos", "Apenas Juros", "Apenas Multas", "Juros + Multas"], key="juros_tipo")
 
-    # Aplicar filtros
-    df_filtrado = df.copy()
+    # Aplicar filtros (partir dos titulos com juros/multa)
+    df_filtrado = df_com_juros.copy()
 
     if filtro_categoria != 'Todas':
         df_filtrado = df_filtrado[df_filtrado['DESCRICAO'] == filtro_categoria]
@@ -95,11 +96,8 @@ def _render_secao_juros(df, df_com_juros, cores):
         df_filtrado = df_filtrado[df_filtrado['VALOR_JUROS'] > 0]
     elif tipo_custo == "Apenas Multas":
         df_filtrado = df_filtrado[df_filtrado['VALOR_MULTA'] > 0]
-    elif tipo_custo == "Juros + Multas":
-        df_filtrado = df_filtrado[(df_filtrado['VALOR_JUROS'] > 0) | (df_filtrado['VALOR_MULTA'] > 0)]
 
-    # Dados filtrados com juros/multas
-    df_com_custos = df_filtrado[(df_filtrado['VALOR_JUROS'] > 0) | (df_filtrado['VALOR_MULTA'] > 0)]
+    df_com_custos = df_filtrado
 
     st.divider()
 
@@ -567,7 +565,7 @@ def _render_secao_juros(df, df_com_juros, cores):
             'VALOR_JUROS': 'Juros',
             'VALOR_MULTA': 'Multa',
             'PCT_JUROS': '% Juros',
-            'SALDO': 'Saldo',
+            'SALDO': 'Pendente',
             'STATUS': 'Status'
         }
         df_tab.columns = [nomes.get(c, c) for c in df_tab.columns]
@@ -992,7 +990,7 @@ def _render_secao_cambio(df, df_dolar, df_real, cores):
             'VALOR_ORIGINAL': 'Valor USD',
             'TX_MOEDA': 'Taxa',
             'VALOR_REAL': 'Valor em R$',
-            'SALDO': 'Saldo',
+            'SALDO': 'Pendente',
             'STATUS': 'Status'
         }
         df_tab.columns = [nomes.get(c, c) for c in df_tab.columns]

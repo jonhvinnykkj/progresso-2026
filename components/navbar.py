@@ -249,7 +249,6 @@ def render_navbar(pagina_atual: str = "pagar", mostrar_filtro_tempo: bool = True
                             type="primary" if is_active else "secondary"
                         ):
                             st.session_state.filtro_rapido = key
-                            st.rerun()
 
                 # Calcular datas baseado no filtro rapido
                 filtro = st.session_state.filtro_rapido

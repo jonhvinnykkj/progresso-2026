@@ -101,12 +101,7 @@ def render_adiantamentos(df_adiant, df_baixas):
 
     st.divider()
 
-    # ========== 4. AGING ==========
-    _render_aging(df_ad, cores, hoje)
-
-    st.divider()
-
-    # ========== 5. POR FILIAL/GRUPO ==========
+    # ========== 4. POR FILIAL/GRUPO ==========
     _render_por_filial(df_ad, df_bx, cores)
 
     st.divider()
@@ -255,7 +250,7 @@ def _render_fluxo_mensal(df_ad, df_bx, cores, hoje):
 
 
 def _render_top_fornecedores(df_ad, cores):
-    """Secao 3 - Top 10 Fornecedores (stacked bar + donut concentracao)"""
+    """Secao 3 - Top 10 Fornecedores (3 graficos: compensado, adiantado, pendente)"""
     st.markdown("##### Top 10 Fornecedores")
 
     if 'NOME_FORNECEDOR' not in df_ad.columns:
@@ -269,142 +264,75 @@ def _render_top_fornecedores(df_ad, cores):
     }).reset_index()
     df_forn.columns = ['Fornecedor', 'Total', 'Pendente', 'Qtd']
     df_forn['Compensado'] = df_forn['Total'] - df_forn['Pendente']
-    df_forn = df_forn.sort_values('Pendente', ascending=False)
 
-    df_top = df_forn.head(10).sort_values('Pendente', ascending=True)
-
-    if len(df_top) == 0:
+    if len(df_forn) == 0:
         st.success("Nenhum adiantamento encontrado.")
         return
 
-    col1, col2 = st.columns([2, 1])
+    col1, col2, col3 = st.columns(3)
 
     with col1:
-        fig = go.Figure()
-        fig.add_trace(go.Bar(
-            y=df_top['Fornecedor'].str[:30], x=df_top['Compensado'],
-            orientation='h', name='Compensado', marker_color=cores['sucesso'],
-            text=[formatar_moeda(v) for v in df_top['Compensado']],
-            textposition='inside', textfont=dict(size=8, color='white')
-        ))
-        fig.add_trace(go.Bar(
-            y=df_top['Fornecedor'].str[:30], x=df_top['Pendente'],
-            orientation='h', name='Pendente', marker_color=cores['alerta'],
-            text=[formatar_moeda(v) for v in df_top['Pendente']],
-            textposition='inside', textfont=dict(size=8, color='white')
+        st.markdown("###### Por Compensado")
+        df_top_comp = df_forn[df_forn['Compensado'] > 0].sort_values('Compensado', ascending=False).head(10)
+        df_top_comp = df_top_comp.sort_values('Compensado', ascending=True)
+
+        if len(df_top_comp) > 0:
+            fig = go.Figure(go.Bar(
+                y=df_top_comp['Fornecedor'].str[:25], x=df_top_comp['Compensado'],
+                orientation='h', marker_color=cores['sucesso'],
+                text=[formatar_moeda(v) for v in df_top_comp['Compensado']],
+                textposition='outside', textfont=dict(size=8)
+            ))
+            fig.update_layout(
+                criar_layout(320),
+                margin=dict(l=10, r=80, t=10, b=10),
+                xaxis=dict(showticklabels=False, showgrid=False),
+                yaxis=dict(tickfont=dict(size=9, color=cores['texto']))
+            )
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.info("Sem compensacoes.")
+
+    with col2:
+        st.markdown("###### Por Adiantado")
+        df_top_total = df_forn.sort_values('Total', ascending=False).head(10)
+        df_top_total = df_top_total.sort_values('Total', ascending=True)
+
+        fig = go.Figure(go.Bar(
+            y=df_top_total['Fornecedor'].str[:25], x=df_top_total['Total'],
+            orientation='h', marker_color=cores['info'],
+            text=[formatar_moeda(v) for v in df_top_total['Total']],
+            textposition='outside', textfont=dict(size=8)
         ))
         fig.update_layout(
             criar_layout(320),
-            barmode='stack',
-            margin=dict(l=10, r=10, t=10, b=10),
+            margin=dict(l=10, r=80, t=10, b=10),
             xaxis=dict(showticklabels=False, showgrid=False),
-            yaxis=dict(tickfont=dict(size=9, color=cores['texto'])),
-            legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='right', x=1, font=dict(size=9))
+            yaxis=dict(tickfont=dict(size=9, color=cores['texto']))
         )
         st.plotly_chart(fig, use_container_width=True)
 
-    with col2:
-        # Donut concentracao
-        valor_pendente = df_forn['Pendente'].sum()
-        df_pend = df_forn[df_forn['Pendente'] > 0]
+    with col3:
+        st.markdown("###### Por Pendente")
+        df_top_pend = df_forn[df_forn['Pendente'] > 0].sort_values('Pendente', ascending=False).head(10)
+        df_top_pend = df_top_pend.sort_values('Pendente', ascending=True)
 
-        if len(df_pend) > 5:
-            df_donut = df_pend.head(5)[['Fornecedor', 'Pendente']].copy()
-            outros = df_pend.iloc[5:]['Pendente'].sum()
-            df_donut = pd.concat([df_donut, pd.DataFrame({'Fornecedor': ['Outros'], 'Pendente': [outros]})], ignore_index=True)
-        else:
-            df_donut = df_pend[['Fornecedor', 'Pendente']].copy()
-
-        if len(df_donut) > 0:
-            fig = go.Figure(go.Pie(
-                labels=df_donut['Fornecedor'].str[:20],
-                values=df_donut['Pendente'],
-                hole=0.6,
-                textinfo='percent',
-                textfont=dict(size=9, color=cores['texto'])
+        if len(df_top_pend) > 0:
+            fig = go.Figure(go.Bar(
+                y=df_top_pend['Fornecedor'].str[:25], x=df_top_pend['Pendente'],
+                orientation='h', marker_color=cores['alerta'],
+                text=[formatar_moeda(v) for v in df_top_pend['Pendente']],
+                textposition='outside', textfont=dict(size=8)
             ))
             fig.update_layout(
-                criar_layout(280),
-                showlegend=False,
-                margin=dict(l=10, r=10, t=10, b=10),
-                annotations=[dict(
-                    text=f"<b>{formatar_moeda(valor_pendente)}</b><br>Pendente",
-                    x=0.5, y=0.5, font=dict(size=10, color=cores['texto']),
-                    showarrow=False
-                )]
+                criar_layout(320),
+                margin=dict(l=10, r=80, t=10, b=10),
+                xaxis=dict(showticklabels=False, showgrid=False),
+                yaxis=dict(tickfont=dict(size=9, color=cores['texto']))
             )
             st.plotly_chart(fig, use_container_width=True)
-
-
-def _render_aging(df_ad, cores, hoje):
-    """Secao 4 - Aging: pendentes por faixa de tempo"""
-    st.markdown("##### Aging - Pendentes por Faixa de Tempo")
-
-    if 'SALDO' not in df_ad.columns:
-        st.info("Sem dados de saldo.")
-        return
-
-    df_pend = df_ad[df_ad['SALDO'] > 0].copy()
-    if len(df_pend) == 0:
-        st.success("Nenhum adiantamento pendente!")
-        return
-
-    if 'DIAS_PENDENTE' not in df_pend.columns:
-        df_pend['DIAS_PENDENTE'] = (hoje - df_pend['EMISSAO']).dt.days
-
-    # Classificar faixas
-    def faixa_aging(dias):
-        if pd.isna(dias) or dias < 0:
-            return 'N/A'
-        dias = int(dias)
-        if dias <= 30:
-            return '0-30d'
-        elif dias <= 60:
-            return '31-60d'
-        elif dias <= 90:
-            return '61-90d'
-        elif dias <= 180:
-            return '91-180d'
-        return '180+d'
-
-    df_pend['FAIXA'] = df_pend['DIAS_PENDENTE'].apply(faixa_aging)
-    ordem = ['0-30d', '31-60d', '61-90d', '91-180d', '180+d']
-    cores_aging = [cores['sucesso'], cores['info'], cores['alerta'], '#f97316', cores['perigo']]
-
-    total_pendente = df_pend['SALDO'].sum()
-    dias_medio = df_pend['DIAS_PENDENTE'].mean()
-    dias_max = df_pend['DIAS_PENDENTE'].max()
-    df_critico = df_pend[df_pend['DIAS_PENDENTE'] > 90]
-    valor_critico = df_critico['SALDO'].sum()
-
-    # KPIs
-    col1, col2, col3, col4 = st.columns(4)
-    col1.metric("Valor sem Baixa", formatar_moeda(total_pendente), f"{len(df_pend)} titulos")
-    col2.metric("Tempo Medio", f"{dias_medio:.0f} dias")
-    col3.metric("Mais Antigo", f"{int(dias_max)} dias")
-    col4.metric("Criticos >90d", formatar_moeda(valor_critico), f"{len(df_critico)} titulos")
-
-    # Grafico barras horizontais por faixa
-    df_aging = df_pend.groupby('FAIXA').agg({
-        'SALDO': 'sum',
-        'DIAS_PENDENTE': 'count'
-    }).reindex(ordem, fill_value=0).reset_index()
-    df_aging.columns = ['Faixa', 'Valor', 'Qtd']
-
-    fig = go.Figure()
-    fig.add_trace(go.Bar(
-        y=df_aging['Faixa'], x=df_aging['Valor'],
-        orientation='h', marker_color=cores_aging,
-        text=[f"{formatar_moeda(v)} ({int(q)} tit.)" for v, q in zip(df_aging['Valor'], df_aging['Qtd'])],
-        textposition='outside', textfont=dict(size=9, color=cores['texto'])
-    ))
-    fig.update_layout(
-        criar_layout(250),
-        margin=dict(l=10, r=120, t=10, b=10),
-        xaxis=dict(showticklabels=False, showgrid=False),
-        yaxis=dict(tickfont=dict(size=10, color=cores['texto']), autorange='reversed')
-    )
-    st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.success("Sem pendencias!")
 
 
 def _render_por_filial(df_ad, df_bx, cores):
@@ -462,8 +390,8 @@ def _render_por_filial(df_ad, df_bx, cores):
 
 
 def _render_prazos(df_bx, cores):
-    """Secao 6 - Prazos de Compensacao (distribuicao + evolucao mensal)"""
-    st.markdown("##### Prazos de Compensacao")
+    """Secao 6 - Tempo de Compensacao (distribuicao + evolucao mensal)"""
+    st.markdown("##### Tempo de Compensacao")
 
     if len(df_bx) == 0 or 'DIF_DIAS_EMIS_BAIXA' not in df_bx.columns:
         st.info("Sem dados de compensacao.")
@@ -589,7 +517,7 @@ def _render_consulta_fornecedor(df_ad, df_bx, cores):
     col4.metric("Prazo Medio", f"{prazo_forn:.0f}d" if prazo_forn > 0 else "-")
 
     # Tabela de titulos
-    colunas = ['NOME_FILIAL', 'NUMERO', 'EMISSAO', 'VALOR_ORIGINAL', 'SALDO']
+    colunas = ['NOME_FILIAL', 'TIPO', 'NUMERO', 'EMISSAO', 'VALOR_ORIGINAL', 'SALDO']
     colunas_disp = [c for c in colunas if c in df_sel.columns]
     df_tab = df_sel[colunas_disp].sort_values('EMISSAO', ascending=False).head(30).copy()
 
@@ -602,10 +530,11 @@ def _render_consulta_fornecedor(df_ad, df_bx, cores):
 
     nomes = {
         'NOME_FILIAL': 'Filial',
-        'NUMERO': 'NF/Doc',
+        'TIPO': 'Tipo',
+        'NUMERO': 'Numero Doc',
         'EMISSAO': 'Emissao',
         'VALOR_ORIGINAL': 'Valor',
-        'SALDO': 'Saldo'
+        'SALDO': 'Pendente'
     }
     df_tab.columns = [nomes.get(c, c) for c in df_tab.columns]
 

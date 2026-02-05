@@ -293,14 +293,14 @@ def _render_analise_parcelas(df, cores):
         'Parcelas_Pendentes': 'Pendentes',
         'Parcelas_Vencidas': 'Vencidas',
         'VALOR_ORIGINAL': 'Principal',
-        'SALDO': 'Saldo',
+        'SALDO': 'Pendente',
         'VALOR_JUROS': 'Juros',
         'EMISSAO': 'Inicio',
         'VENCIMENTO': 'Fim'
     })
 
     st.dataframe(
-        df_show[['Banco', 'Contrato', 'Tipo', 'Total', 'Pagas', 'Pendentes', 'Vencidas', 'Principal', 'Pago', 'Saldo', '% Quitado']],
+        df_show[['Banco', 'Contrato', 'Tipo', 'Total', 'Pagas', 'Pendentes', 'Vencidas', 'Principal', 'Pago', 'Pendente', '% Quitado']],
         use_container_width=True,
         hide_index=True,
         height=350
@@ -480,21 +480,38 @@ def _render_cronograma(df, cores):
         st.plotly_chart(fig, use_container_width=True)
 
     with col2:
-        # Resumo
-        st.markdown("###### Resumo")
+        # Titulos vencidos
+        st.markdown("###### Titulos Vencidos")
 
         hoje = datetime.now()
         df_pend['DIAS_VENC'] = (df_pend['VENCIMENTO'] - pd.Timestamp(hoje)).dt.days
+        df_vencidos = df_pend[df_pend['DIAS_VENC'] < 0].sort_values('SALDO', ascending=False)
 
-        vence_7d = df_pend[df_pend['DIAS_VENC'].between(0, 7)]['SALDO'].sum()
-        vence_30d = df_pend[df_pend['DIAS_VENC'].between(0, 30)]['SALDO'].sum()
-        vence_60d = df_pend[df_pend['DIAS_VENC'].between(0, 60)]['SALDO'].sum()
-        vencido = df_pend[df_pend['DIAS_VENC'] < 0]['SALDO'].sum()
+        if len(df_vencidos) == 0:
+            st.success("Nenhum titulo vencido!")
+        else:
+            st.caption(f"{len(df_vencidos)} titulos vencidos | Total: {formatar_moeda(df_vencidos['SALDO'].sum())}")
 
-        st.metric("Vencido", formatar_moeda(vencido), delta=f"{len(df_pend[df_pend['DIAS_VENC'] < 0])} parcelas", delta_color="inverse")
-        st.metric("Vence em 7 dias", formatar_moeda(vence_7d), f"{len(df_pend[df_pend['DIAS_VENC'].between(0, 7)])} parcelas")
-        st.metric("Vence em 30 dias", formatar_moeda(vence_30d), f"{len(df_pend[df_pend['DIAS_VENC'].between(0, 30)])} parcelas")
-        st.metric("Vence em 60 dias", formatar_moeda(vence_60d), f"{len(df_pend[df_pend['DIAS_VENC'].between(0, 60)])} parcelas")
+            colunas = ['DESCRICAO', 'TIPO', 'NUMERO', 'VENCIMENTO', 'SALDO']
+            colunas_disp = [c for c in colunas if c in df_vencidos.columns]
+            df_tab = df_vencidos[colunas_disp].head(20).copy()
+
+            if 'VENCIMENTO' in df_tab.columns:
+                df_tab['VENCIMENTO'] = df_tab['VENCIMENTO'].dt.strftime('%d/%m/%Y')
+            if 'NUMERO' in df_tab.columns:
+                df_tab['NUMERO'] = df_tab['NUMERO'].astype(str)
+            df_tab['SALDO'] = df_tab['SALDO'].apply(lambda x: formatar_moeda(x, completo=True))
+
+            nomes = {
+                'DESCRICAO': 'Categoria',
+                'TIPO': 'Tipo',
+                'NUMERO': 'Numero Doc',
+                'VENCIMENTO': 'Vencimento',
+                'SALDO': 'Pendente'
+            }
+            df_tab.columns = [nomes.get(c, c) for c in df_tab.columns]
+
+            st.dataframe(df_tab, use_container_width=True, hide_index=True, height=300)
 
 
 def _render_detalhes(df, cores):
@@ -562,7 +579,7 @@ def _render_detalhes(df, cores):
         'EMISSAO': 'Emissao',
         'VENCIMENTO': 'Vencimento',
         'VALOR_ORIGINAL': 'Principal',
-        'SALDO': 'Saldo',
+        'SALDO': 'Pendente',
         'VALOR_JUROS': 'Juros',
         'STATUS': 'Status'
     }

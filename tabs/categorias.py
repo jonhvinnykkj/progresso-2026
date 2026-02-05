@@ -56,14 +56,8 @@ def render_categorias(df):
 
     st.divider()
 
-    # ========== LINHA 2: Comportamento de Pagamento ==========
-    col1, col2 = st.columns(2)
-
-    with col1:
-        _render_prazo_por_categoria(df_pagos, cores)
-
-    with col2:
-        _render_pontualidade_por_categoria(df_pagos, cores)
+    # ========== COMPORTAMENTO DE PAGAMENTO ==========
+    _render_prazo_por_categoria(df_pagos, cores)
 
     st.divider()
 
@@ -77,14 +71,13 @@ def render_categorias(df):
 
     st.divider()
 
-    # ========== LINHA 3: Valor e Vencidos ==========
-    col1, col2 = st.columns(2)
+    # ========== TOP 10 CATEGORIAS ==========
+    _render_top_categorias(df_cat, cores)
 
-    with col1:
-        _render_top_categorias(df_cat, cores)
+    st.divider()
 
-    with col2:
-        _render_vencidos_por_categoria(df_vencidos, cores)
+    # ========== VENCIDOS POR CATEGORIA ==========
+    _render_vencidos_por_categoria(df_vencidos, cores)
 
     st.divider()
 
@@ -458,60 +451,30 @@ def _render_pareto_abc(df_cat, cores):
     </div>
     """, unsafe_allow_html=True)
 
-    # Grafico Pareto (top 20 para nao poluir)
-    df_plot = df_pareto.head(20)
+    # Grafico - barras horizontais por classe
+    df_plot = df_pareto.head(15).copy()
+    df_plot = df_plot.sort_values('Total', ascending=True)
 
     cor_classe = {'A': cores['perigo'], 'B': cores['alerta'], 'C': cores['sucesso']}
     bar_colors = [cor_classe[c] for c in df_plot['Classe']]
 
-    fig = go.Figure()
-
-    # Barras de valor
-    fig.add_trace(go.Bar(
-        x=df_plot['Categoria'].str[:18],
-        y=df_plot['Total'],
-        name='Valor',
+    fig = go.Figure(go.Bar(
+        y=df_plot['Categoria'].str[:25],
+        x=df_plot['Total'],
+        orientation='h',
         marker_color=bar_colors,
-        text=[formatar_moeda(v) for v in df_plot['Total']],
+        text=[f"{formatar_moeda(v)}  ({p:.1f}%) [{c}]"
+              for v, p, c in zip(df_plot['Total'], df_plot['Pct'], df_plot['Classe'])],
         textposition='outside',
-        textfont=dict(size=8, color=cores['texto']),
-        yaxis='y'
+        textfont=dict(size=9, color=cores['texto']),
+        hovertemplate='<b>%{y}</b><br>Valor: R$ %{x:,.0f}<extra></extra>'
     ))
-
-    # Linha acumulada
-    fig.add_trace(go.Scatter(
-        x=df_plot['Categoria'].str[:18],
-        y=df_plot['Acumulado'],
-        name='% Acumulado',
-        mode='lines+markers+text',
-        line=dict(color=cores['texto'], width=2),
-        marker=dict(size=5),
-        text=[f"{v:.0f}%" for v in df_plot['Acumulado']],
-        textposition='top center',
-        textfont=dict(size=8, color=cores['texto']),
-        yaxis='y2'
-    ))
-
-    # Linhas de referencia 80% e 95%
-    fig.add_hline(y=80, line_dash="dot", line_color=cores['perigo'], line_width=1,
-                  annotation_text="80% (A)", annotation_position="right",
-                  annotation_font=dict(size=9, color=cores['perigo']),
-                  yref='y2')
-    fig.add_hline(y=95, line_dash="dot", line_color=cores['alerta'], line_width=1,
-                  annotation_text="95% (B)", annotation_position="right",
-                  annotation_font=dict(size=9, color=cores['alerta']),
-                  yref='y2')
 
     fig.update_layout(
-        criar_layout(350),
-        margin=dict(l=10, r=50, t=10, b=80),
-        xaxis=dict(tickangle=-45, tickfont=dict(size=8, color=cores['texto'])),
-        yaxis=dict(showticklabels=False, showgrid=False, title=None),
-        yaxis2=dict(overlaying='y', side='right', range=[0, 105], showgrid=False,
-                    tickfont=dict(size=9, color=cores['texto']), title=None),
-        legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='right', x=1,
-                    font=dict(size=9, color=cores['texto'])),
-        showlegend=True
+        criar_layout(380),
+        xaxis=dict(showticklabels=False, showgrid=False),
+        yaxis=dict(tickfont=dict(size=9, color=cores['texto'])),
+        margin=dict(l=10, r=120, t=10, b=10)
     )
 
     st.plotly_chart(fig, use_container_width=True)
@@ -803,69 +766,8 @@ def _render_prazo_por_categoria(df_pagos, cores):
     st.caption("Categorias com maior prazo de pagamento")
 
 
-def _render_pontualidade_por_categoria(df_pagos, cores):
-    """Pontualidade por categoria"""
-
-    st.markdown("##### Pontualidade por Categoria")
-
-    if len(df_pagos) == 0 or 'DIAS_ATRASO_PGTO' not in df_pagos.columns:
-        st.info("Sem dados de pagamento")
-        return
-
-    def calc_pontualidade(group):
-        atraso = group['DIAS_ATRASO_PGTO'].dropna()
-        if len(atraso) < 5:  # Minimo 5 para ser estatisticamente relevante
-            return pd.Series({'Pontualidade': None, 'Qtd': len(atraso)})
-        pontual = (atraso <= 0).sum() / len(atraso) * 100
-        return pd.Series({'Pontualidade': pontual, 'Qtd': len(atraso)})
-
-    df_pont = df_pagos.groupby('DESCRICAO').apply(calc_pontualidade).reset_index()
-    df_pont = df_pont.dropna(subset=['Pontualidade'])
-
-    if len(df_pont) == 0:
-        st.info("Dados insuficientes (min. 5 pagamentos)")
-        return
-
-    # Top 10 com pior pontualidade
-    df_piores = df_pont.nsmallest(10, 'Pontualidade')
-
-    def cor_pont(p):
-        if p >= 80:
-            return cores['sucesso']
-        elif p >= 60:
-            return cores['info']
-        elif p >= 40:
-            return cores['alerta']
-        return cores['perigo']
-
-    bar_colors = [cor_pont(p) for p in df_piores['Pontualidade']]
-
-    fig = go.Figure(go.Bar(
-        y=df_piores['DESCRICAO'].str[:25],
-        x=df_piores['Pontualidade'],
-        orientation='h',
-        marker_color=bar_colors,
-        text=[f"{p:.0f}%" for p in df_piores['Pontualidade']],
-        textposition='outside',
-        textfont=dict(size=10)
-    ))
-
-    fig.update_layout(
-        criar_layout(300),
-        yaxis={'autorange': 'reversed'},
-        margin=dict(l=10, r=50, t=10, b=10),
-        xaxis_title='% Pontualidade',
-        xaxis=dict(range=[0, 105])
-    )
-
-    st.plotly_chart(fig, use_container_width=True)
-    st.caption("Categorias com pior pontualidade (min. 5 pagamentos)")
-
-
 def _render_top_categorias(df_cat, cores):
-    """Top 10 categorias - Pago vs Pendente"""
-
-    st.markdown("##### Top 10 - Pago vs Pendente")
+    """Top 10 categorias - Pago e Pendente em graficos separados"""
 
     df_top = df_cat.head(10)
 
@@ -873,38 +775,45 @@ def _render_top_categorias(df_cat, cores):
         st.info("Sem dados")
         return
 
-    fig = go.Figure()
+    col1, col2 = st.columns(2)
 
-    fig.add_trace(go.Bar(
-        y=df_top['Categoria'].str[:25],
-        x=df_top['Pago'],
-        orientation='h',
-        name='Pago',
-        marker_color=cores['sucesso'],
-        text=[formatar_moeda(v) for v in df_top['Pago']],
-        textposition='inside',
-        textfont=dict(size=9, color='white')
-    ))
+    with col1:
+        st.markdown("##### Top 10 - Pago")
+        fig = go.Figure(go.Bar(
+            y=df_top['Categoria'].str[:25],
+            x=df_top['Pago'],
+            orientation='h',
+            marker_color=cores['sucesso'],
+            text=[formatar_moeda(v) for v in df_top['Pago']],
+            textposition='outside',
+            textfont=dict(size=9)
+        ))
+        fig.update_layout(
+            criar_layout(300),
+            yaxis={'autorange': 'reversed'},
+            xaxis=dict(showticklabels=False, showgrid=False),
+            margin=dict(l=10, r=10, t=10, b=10)
+        )
+        st.plotly_chart(fig, use_container_width=True)
 
-    fig.add_trace(go.Bar(
-        y=df_top['Categoria'].str[:25],
-        x=df_top['Pendente'],
-        orientation='h',
-        name='Pendente',
-        marker_color=cores['alerta'],
-        text=[formatar_moeda(v) for v in df_top['Pendente']],
-        textposition='inside',
-        textfont=dict(size=9, color='white')
-    ))
-
-    fig.update_layout(
-        criar_layout(300, barmode='stack'),
-        yaxis={'autorange': 'reversed'},
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-        margin=dict(l=10, r=10, t=30, b=10)
-    )
-
-    st.plotly_chart(fig, use_container_width=True)
+    with col2:
+        st.markdown("##### Top 10 - Pendente")
+        fig = go.Figure(go.Bar(
+            y=df_top['Categoria'].str[:25],
+            x=df_top['Pendente'],
+            orientation='h',
+            marker_color=cores['alerta'],
+            text=[formatar_moeda(v) for v in df_top['Pendente']],
+            textposition='outside',
+            textfont=dict(size=9)
+        ))
+        fig.update_layout(
+            criar_layout(300),
+            yaxis={'autorange': 'reversed'},
+            xaxis=dict(showticklabels=False, showgrid=False),
+            margin=dict(l=10, r=10, t=10, b=10)
+        )
+        st.plotly_chart(fig, use_container_width=True)
 
 
 def _render_vencidos_por_categoria(df_vencidos, cores):
@@ -1073,7 +982,7 @@ def _render_busca_categoria(df, df_pagos, df_vencidos, cores):
             st.plotly_chart(fig, use_container_width=True)
 
     with tab3:
-        colunas = ['NOME_FILIAL', 'NOME_FORNECEDOR', 'NUMERO', 'EMISSAO', 'VENCIMENTO', 'DT_BAIXA', 'DIAS_PARA_PAGAR', 'VALOR_ORIGINAL', 'SALDO', 'STATUS']
+        colunas = ['NOME_FILIAL', 'NOME_FORNECEDOR', 'TIPO', 'NUMERO', 'EMISSAO', 'VENCIMENTO', 'DT_BAIXA', 'DIAS_PARA_PAGAR', 'VALOR_ORIGINAL', 'SALDO', 'STATUS']
         colunas_disp = [c for c in colunas if c in df_sel.columns]
         df_tab = df_sel[colunas_disp].nlargest(50, 'VALOR_ORIGINAL').copy()
 
@@ -1091,13 +1000,14 @@ def _render_busca_categoria(df, df_pagos, df_vencidos, cores):
         nomes = {
             'NOME_FILIAL': 'Filial',
             'NOME_FORNECEDOR': 'Fornecedor',
-            'NUMERO': 'NF/Doc',
+            'TIPO': 'Tipo',
+            'NUMERO': 'Numero Doc',
             'EMISSAO': 'Emissao',
             'VENCIMENTO': 'Vencimento',
             'DT_BAIXA': 'Dt Pagto',
             'DIAS_PARA_PAGAR': 'Dias p/ Pagar',
             'VALOR_ORIGINAL': 'Valor',
-            'SALDO': 'Saldo',
+            'SALDO': 'Pendente',
             'STATUS': 'Status'
         }
         df_tab.columns = [nomes.get(c, c) for c in df_tab.columns]

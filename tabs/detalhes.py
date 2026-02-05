@@ -84,7 +84,7 @@ def render_detalhes(df):
     with col3:
         filtro_tipo = st.radio(
             "Mostrar",
-            ["Todos", "Com Saldo", "Pagos"],
+            ["Todos", "Com Pendente", "Pagos"],
             horizontal=True,
             key="det_tipo"
         )
@@ -143,7 +143,7 @@ def render_detalhes(df):
 
     col1.metric("Titulos", formatar_numero(len(df_filtrado)))
     col2.metric("Valor Total", formatar_moeda(df_filtrado['VALOR_ORIGINAL'].sum()))
-    col3.metric("Saldo", formatar_moeda(df_filtrado['SALDO'].sum()))
+    col3.metric("Pendente", formatar_moeda(df_filtrado['SALDO'].sum()))
 
     qtd_vencidos = len(df_filtrado[df_filtrado['STATUS'] == 'Vencido'])
     col4.metric("Vencidos", formatar_numero(qtd_vencidos))
@@ -203,7 +203,7 @@ def _aplicar_filtros(df):
 
     # Tipo (saldo)
     filtro_tipo = st.session_state.get('det_tipo', 'Todos')
-    if filtro_tipo == 'Com Saldo':
+    if filtro_tipo == 'Com Pendente':
         df_filtrado = df_filtrado[df_filtrado['SALDO'] > 0]
     elif filtro_tipo == 'Pagos':
         df_filtrado = df_filtrado[df_filtrado['SALDO'] == 0]
@@ -341,7 +341,7 @@ def _render_tabela_titulos(df_filtrado, cores, hoje):
         'VENCIMENTO': 'Vencimento',
         'DT_BAIXA': 'Dt Pagto',
         'VALOR_ORIGINAL': 'Valor',
-        'SALDO': 'Saldo',
+        'SALDO': 'Pendente',
         'STATUS': 'Status',
         'DIAS_ATRASO': 'Atraso',
         'DIAS_PARA_PAGAR': 'Dias p/ Pagar',
@@ -380,7 +380,7 @@ def _render_por_fornecedor(df_filtrado, cores):
     with col1:
         ordem = st.radio(
             "Ordenar por:",
-            ["Maior Total", "Maior Saldo", "Mais Titulos", "Maior Atraso"],
+            ["Maior Total", "Maior Pendente", "Mais Titulos", "Maior Atraso"],
             horizontal=True,
             key="det_forn_ordem"
         )
@@ -390,7 +390,7 @@ def _render_por_fornecedor(df_filtrado, cores):
     # Aplicar ordenacao
     ordem_map = {
         "Maior Total": ("Total", False),
-        "Maior Saldo": ("Saldo", False),
+        "Maior Pendente": ("Saldo", False),
         "Mais Titulos": ("Qtd", False),
         "Maior Atraso": ("Atraso Medio", False)
     }
@@ -425,7 +425,7 @@ def _render_exportar(df_filtrado, hoje):
 
     col1.metric("Titulos", formatar_numero(len(df_filtrado)))
     col2.metric("Valor Total", formatar_moeda(df_filtrado['VALOR_ORIGINAL'].sum()))
-    col3.metric("Saldo", formatar_moeda(df_filtrado['SALDO'].sum()))
+    col3.metric("Pendente", formatar_moeda(df_filtrado['SALDO'].sum()))
     col4.metric("Fornecedores", formatar_numero(df_filtrado['NOME_FORNECEDOR'].nunique()))
 
     st.markdown("---")

@@ -33,20 +33,20 @@ def render_sidebar(df_contas, filiais_opcoes, categorias_opcoes):
         # Filtros (Filial agora esta na navbar)
         st.markdown(f"<p style='color: {cores['texto']}; font-size: 0.8rem; font-weight: 600; margin-bottom: 0.5rem;'>Filtros</p>", unsafe_allow_html=True)
 
-        filtro_status = st.selectbox("Status", STATUS_OPCOES)
-        filtro_categoria = st.selectbox("Categoria", categorias_opcoes)
+        filtro_status = st.selectbox("Status", STATUS_OPCOES, key="sb_status")
+        filtro_categoria = st.selectbox("Categoria", categorias_opcoes, key="sb_categoria")
 
         # Novo filtro: Tipo de Documento (NF/Sem NF)
-        filtro_tipo_doc = st.selectbox("Tipo Documento", ['Todos', 'Com NF', 'Sem NF'])
+        filtro_tipo_doc = st.selectbox("Tipo Documento", ['Todos', 'Com NF', 'Sem NF'], key="sb_tipo_doc")
 
         # Novo filtro: Forma de Pagamento
         formas_pagto = ['Todas']
         if 'DESCRICAO_FORMA_PAGAMENTO' in df_contas.columns:
             formas_unicas = df_contas['DESCRICAO_FORMA_PAGAMENTO'].dropna().unique().tolist()
             formas_pagto += sorted([f for f in formas_unicas if f and str(f).strip()])
-        filtro_forma_pagto = st.selectbox("Forma Pagamento", formas_pagto)
+        filtro_forma_pagto = st.selectbox("Forma Pagamento", formas_pagto, key="sb_forma_pagto")
 
-        busca_fornecedor = st.text_input("Fornecedor", placeholder="Buscar...")
+        busca_fornecedor = st.text_input("Fornecedor", placeholder="Buscar...", key="sb_busca_forn")
 
         st.divider()
 
